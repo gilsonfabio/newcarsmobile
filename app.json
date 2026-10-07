@@ -1,16 +1,19 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "Mobilidade",
+    "slug": "mobilidade",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "mobile",
+    "scheme": "mobilidade",
     "userInterfaceStyle": "automatic",
+
     "ios": {
       "icon": "./assets/expo.icon"
     },
+
     "android": {
+      "package": "com.gilsonfabio.mobilidade",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -19,12 +22,22 @@
       },
       "predictiveBackGestureEnabled": false
     },
+
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
+
     "plugins": [
       "expo-router",
+
+      [
+        "react-native-maps",
+        {
+          "androidGoogleMapsApiKey": "AIzaSyDX1uKVAhIl0iCkV8Bbj1nti2mU7Th5390"
+        }
+      ],
+
       [
         "expo-splash-screen",
         {
@@ -32,11 +45,23 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+
+      "expo-secure-store",
+      "expo-dev-client"
     ],
+
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+
+    "extra": {
+      "googleMapsApiKey": "AIzaSyDX1uKVAhIl0iCkV8Bbj1nti2mU7Th5390",
+
+      "eas": {
+        "projectId": "f36c171a-daa9-4919-9a01-b0b37d3ae5e4"
+      }
     }
   }
 }
