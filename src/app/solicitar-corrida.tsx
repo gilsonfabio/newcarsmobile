@@ -60,18 +60,13 @@ export default function SolicitarCorrida() {
     longitude: string;
   }>();
 
-  const googleMapsApiKey =
-    Constants.expoConfig?.extra?.googleMapsApiKey;
+  const googleMapsApiKey = Constants.expoConfig?.extra?.googleMapsApiKey;
 
   const [textoDestino, setTextoDestino] = useState('');
   const [sugestoes, setSugestoes] = useState<Sugestao[]>([]);
-
   const [buscando, setBuscando] = useState(false);
-  const [carregandoDetalhes, setCarregandoDetalhes] =
-    useState(false);
-
-  const [destinoSelecionado, setDestinoSelecionado] =
-    useState(false);
+  const [carregandoDetalhes, setCarregandoDetalhes] = useState(false);
+  const [destinoSelecionado, setDestinoSelecionado] = useState(false);
 
   const [destino, setDestino] = useState('');
   const [destinoLatitude, setDestinoLatitude] =
