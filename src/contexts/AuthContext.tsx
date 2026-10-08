@@ -51,6 +51,10 @@ export function AuthProvider({
     carregarSessao();
   }, []);
 
+  // ==========================================================
+  // CARREGAR SESSÃO SALVA
+  // ==========================================================
+
   async function carregarSessao() {
     try {
 
@@ -62,15 +66,15 @@ export function AuthProvider({
 
       if (tokenSalvo && usuarioSalvo) {
 
-        const usuario = JSON.parse(
-          usuarioSalvo
-        );
+        const usuarioParseado: Usuario =
+          JSON.parse(usuarioSalvo);
 
         setToken(tokenSalvo);
 
-        setUsuario(usuario);
+        setUsuario(usuarioParseado);
 
-        api.defaults.headers.common.Authorization = `Bearer ${tokenSalvo}`;
+        api.defaults.headers.common.Authorization =
+          `Bearer ${tokenSalvo}`;
       }
 
     } catch (error) {
@@ -86,78 +90,165 @@ export function AuthProvider({
     }
   }
 
+  // ==========================================================
+  // LOGIN
+  // ==========================================================
+
   async function login(data: LoginData) {
 
-    const response = await api.post<LoginResponse>(
-      '/signIn',
-      data
-    );
+    try {
 
-    const dados = response.data;
+      const response =
+        await api.post<LoginResponse>(
+          '/signIn',
+          data
+        );
 
-    await SecureStore.setItemAsync(
-      'token',
-      dados.token
-    );
+      const dados = response.data;
 
-    await SecureStore.setItemAsync(
-      'refreshToken',
-      dados.refreshToken
-    );
+      console.log('=================================');
+      console.log('LOGIN REALIZADO');
+      console.log('Usuário:', dados.name);
+      console.log('Tipo:', dados.tipo);
+      console.log('Motorista:', dados.motorista);
+      console.log('=================================');
 
-    await SecureStore.setItemAsync(
-      'usuario',
-      JSON.stringify({
+      // ------------------------------------------------------
+      // SALVA TOKEN
+      // ------------------------------------------------------
+
+      await SecureStore.setItemAsync(
+        'token',
+        dados.token
+      );
+
+      // ------------------------------------------------------
+      // SALVA REFRESH TOKEN
+      // ------------------------------------------------------
+
+      await SecureStore.setItemAsync(
+        'refreshToken',
+        dados.refreshToken
+      );
+
+      // ------------------------------------------------------
+      // MONTA USUÁRIO COMPLETO
+      // ------------------------------------------------------
+      //
+      // IMPORTANTE:
+      // Agora mantemos motorista e veículo.
+      //
+
+      const usuarioCompleto: Usuario = {
         id: dados.id,
         name: dados.name,
         email: dados.email,
         telefone: dados.telefone,
         tipo: dados.tipo,
-      })
-    );
+        motorista: dados.motorista ?? null,
+      };
 
-    api.defaults.headers.common.Authorization =
-      `Bearer ${dados.token}`;
+      // ------------------------------------------------------
+      // SALVA USUÁRIO
+      // ------------------------------------------------------
 
-    setToken(dados.token);
+      await SecureStore.setItemAsync(
+        'usuario',
+        JSON.stringify(usuarioCompleto)
+      );
 
-    setUsuario({
-      id: dados.id,
-      name: dados.name,
-      email: dados.email,
-      telefone: dados.telefone,
-      tipo: dados.tipo,
-    });
+      // ------------------------------------------------------
+      // CONFIGURA TOKEN NO AXIOS
+      // ------------------------------------------------------
+
+      api.defaults.headers.common.Authorization =
+        `Bearer ${dados.token}`;
+
+      // ------------------------------------------------------
+      // ATUALIZA ESTADO
+      // ------------------------------------------------------
+
+      setToken(dados.token);
+
+      setUsuario(usuarioCompleto);
+
+    } catch (error) {
+
+      console.error(
+        'Erro ao realizar login:',
+        error
+      );
+
+      throw error;
+    }
   }
+
+  // ==========================================================
+  // CADASTRO
+  // ==========================================================
 
   async function cadastro(
     data: CadastroData
   ) {
 
-    await api.post(
-      '/signUp',
-      data
-    );
+    try {
+
+      await api.post(
+        '/signUp',
+        data
+      );
+
+    } catch (error) {
+
+      console.error(
+        'Erro ao realizar cadastro:',
+        error
+      );
+
+      throw error;
+    }
   }
+
+  // ==========================================================
+  // LOGOUT
+  // ==========================================================
 
   async function logout() {
 
-    await SecureStore.deleteItemAsync('token');
+    try {
 
-    await SecureStore.deleteItemAsync(
-      'refreshToken'
-    );
+      await SecureStore.deleteItemAsync(
+        'token'
+      );
 
-    await SecureStore.deleteItemAsync(
-      'usuario'
-    );
+      await SecureStore.deleteItemAsync(
+        'refreshToken'
+      );
 
-    delete api.defaults.headers.common.Authorization;
+      await SecureStore.deleteItemAsync(
+        'usuario'
+      );
 
-    setToken(null);
+      delete api.defaults.headers.common.Authorization;
 
-    setUsuario(null);
+      setToken(null);
+
+      setUsuario(null);
+
+    } catch (error) {
+
+      console.error(
+        'Erro ao realizar logout:',
+        error
+      );
+
+      throw error;
+    }
   }
+
+  // ==========================================================
+  // PROVIDER
+  // ==========================================================
 
   return (
     <AuthContext.Provider
@@ -174,6 +265,10 @@ export function AuthProvider({
     </AuthContext.Provider>
   );
 }
+
+// ============================================================
+// HOOK
+// ============================================================
 
 export function useAuth() {
   return useContext(AuthContext);

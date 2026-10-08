@@ -69,10 +69,8 @@ export default function SolicitarCorrida() {
   const [destinoSelecionado, setDestinoSelecionado] = useState(false);
 
   const [destino, setDestino] = useState('');
-  const [destinoLatitude, setDestinoLatitude] =
-    useState<number | null>(null);
-  const [destinoLongitude, setDestinoLongitude] =
-    useState<number | null>(null);
+  const [destinoLatitude, setDestinoLatitude] = useState<number | null>(null);
+  const [destinoLongitude, setDestinoLongitude] = useState<number | null>(null);
 
   const [carregando, setCarregando] = useState(false);
 
@@ -172,17 +170,14 @@ export default function SolicitarCorrida() {
         }
       );
 
-      const resultado: AutocompleteResponse =
-        await response.json();
+      const resultado: AutocompleteResponse = await response.json();
 
       if (!response.ok) {
         console.error(
           'Erro Autocomplete (New):',
           resultado
         );
-
         setSugestoes([]);
-
         return;
       }
 

@@ -5,19 +5,23 @@ import {
   Text,
   TouchableOpacity,
   View,
+  ScrollView,
 } from 'react-native';
 
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
+import Constants from 'expo-constants';
 
 import {
   useCallback,
   useEffect,
   useState,
+  useRef
 } from 'react';
 
 import MapView, {
   Marker,
+  Polyline,
   Region,
 } from 'react-native-maps';
 
@@ -63,6 +67,64 @@ interface Corrida {
     motorista?: Motorista | null;
 }
 
+function decodificarPolyline(
+  encoded: string
+): Localizacao[] {
+
+  const pontos: Localizacao[] = [];
+
+  let index = 0;
+  let latitude = 0;
+  let longitude = 0;
+
+  while (index < encoded.length) {
+
+    let shift = 0;
+    let resultado = 0;
+    let byte: number;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+
+      resultado |=
+        (byte & 0x1f) << shift;
+
+      shift += 5;
+
+    } while (byte >= 0x20);
+
+    const deltaLatitude =
+      resultado & 1
+        ? ~(resultado >> 1)
+        : resultado >> 1;
+
+    latitude += deltaLatitude;
+
+    shift = 0;
+    resultado = 0;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      resultado |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+
+    const deltaLongitude =
+      resultado & 1
+        ? ~(resultado >> 1)
+        : resultado >> 1;
+
+    longitude += deltaLongitude;
+
+    pontos.push({
+      latitude: latitude / 100000,
+      longitude: longitude / 100000,
+    });
+  }
+
+  return pontos;
+}
+
 export default function Cliente() {
   const {
     usuario,
@@ -74,6 +136,130 @@ export default function Cliente() {
   const [localizacao, setLocalizacao] = useState<Localizacao | null>(null);
   const [carregandoLocalizacao, setCarregandoLocalizacao] = useState(true);
   const [corridaAtual, setCorridaAtual] = useState<Corrida | null>(null);
+
+  const [rota, setRota] = useState<Localizacao[]>([]);
+  const [carregandoRota, setCarregandoRota] = useState(false);
+
+  const mapaRef = useRef<MapView | null>(null);
+  const [painelExpandido, setPainelExpandido] = useState(false);
+   
+  const calcularRota = useCallback(async (
+    origem: Localizacao,
+    destino: Localizacao
+  ) => {
+
+    try {
+
+      setCarregandoRota(true);
+
+      const apiKey = Constants.expoConfig?.extra?.googleMapsApiKey;
+
+      if (!apiKey) {
+        console.error(
+          'GOOGLE MAPS API KEY não encontrada.'
+        );
+
+        return;
+      }
+
+      const response = await fetch(
+        'https://routes.googleapis.com/directions/v2:computeRoutes',
+        {
+          method: 'POST',
+
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask':
+              'routes.polyline.encodedPolyline,routes.distanceMeters,routes.duration',
+          },
+
+          body: JSON.stringify({
+
+            origin: {
+              location: {
+                latLng: {
+                  latitude: origem.latitude,
+                  longitude: origem.longitude,
+                },
+              },
+            },
+
+            destination: {
+              location: {
+                latLng: {
+                  latitude: destino.latitude,
+                  longitude: destino.longitude,
+                },
+              },
+            },
+
+            travelMode: 'DRIVE',
+
+            routingPreference: 'TRAFFIC_AWARE',
+
+            computeAlternativeRoutes: false,
+
+            languageCode: 'pt-BR',
+
+            units: 'METRIC',
+          }),
+        }
+      );
+
+      if (!response.ok) {
+
+        const erro = await response.text();
+
+        console.error(
+          'Erro Google Routes:',
+          erro
+        );
+
+        return;
+      }
+
+      const data = await response.json();
+
+      const encodedPolyline =
+        data?.routes?.[0]?.polyline?.encodedPolyline;
+
+      if (!encodedPolyline) {
+
+        console.error(
+          'Google não retornou a rota:',
+          data
+        );
+
+        return;
+      }
+
+      const pontos =
+        decodificarPolyline(
+          encodedPolyline
+        );
+
+      setRota(pontos);
+
+      console.log(
+        'Rota calculada:',
+        pontos.length,
+        'pontos'
+      );
+
+    } catch (error) {
+
+      console.error(
+        'Erro ao calcular rota:',
+        error
+      );
+
+    } finally {
+
+      setCarregandoRota(false);
+    }
+
+  }, []);
 
 
   const handleLogout = () => {
@@ -328,6 +514,88 @@ export default function Cliente() {
 
   /*
    * ============================================================
+   * EFFECT 
+   * ============================================================
+   */
+
+    
+  useEffect(() => {
+    // Sem corrida ativa: limpa a rota e volta para o cliente.
+    if (
+      !corridaAtual ||
+      corridaAtual.status === 'FINALIZADA' ||
+      corridaAtual.status === 'CANCELADA'
+    ) {
+      setRota([]);
+
+      if (localizacao) {
+        mapaRef.current?.animateToRegion(
+          {
+            latitude: localizacao.latitude,
+            longitude: localizacao.longitude,
+            latitudeDelta: 0.015,
+            longitudeDelta: 0.015,
+          },
+          700
+        );
+      }
+
+      return;
+    }
+
+    if (
+      !corridaAtual.origem_latitude ||
+      !corridaAtual.origem_longitude ||
+      !corridaAtual.destino_latitude ||
+      !corridaAtual.destino_longitude
+    ) {
+      setRota([]);
+      return;
+    }
+
+    calcularRota(
+      {
+        latitude: corridaAtual.origem_latitude,
+        longitude: corridaAtual.origem_longitude,
+      },
+      {
+        latitude: corridaAtual.destino_latitude,
+        longitude: corridaAtual.destino_longitude,
+      }
+    );
+  }, [
+    corridaAtual?.id,
+    corridaAtual?.status,
+    corridaAtual?.origem_latitude,
+    corridaAtual?.origem_longitude,
+    corridaAtual?.destino_latitude,
+    corridaAtual?.destino_longitude,
+    localizacao,
+    calcularRota,
+  ]);
+
+  useEffect(() => {
+    if (rota.length < 2) {
+      return;
+    }
+
+    const temporizador = setTimeout(() => {
+      mapaRef.current?.fitToCoordinates(rota, {
+        edgePadding: {
+          top: 170,
+          right: 55,
+          bottom: 300,
+          left: 55,
+        },
+        animated: true,
+      });
+    }, 400);
+
+    return () => clearTimeout(temporizador);
+  }, [rota]);
+
+  /*
+   * ============================================================
    * REGIÃO INICIAL DO MAPA
    * ============================================================
    */
@@ -503,41 +771,55 @@ export default function Cliente() {
           </View>
         ) : (
           <MapView
+            ref={mapaRef}
             style={styles.mapa}
-            initialRegion={
-              regiaoInicial
-            }
+            initialRegion={regiaoInicial}
             showsUserLocation
             showsMyLocationButton
-          >
-            {/* Localização do cliente */}
-
+          >       
+            {/* Marcador do cliente */}
             <Marker
               coordinate={{
-                latitude:
-                  localizacao.latitude,
-
-                longitude:
-                  localizacao.longitude,
+                latitude: localizacao.latitude,
+                longitude: localizacao.longitude,
               }}
               title="Você"
             />
 
-            {/* Destino da corrida */}
-
-            {corridaAtual && (
+            {/* Marcador do destino */}
+            {corridaAtual &&
+             corridaAtual.status !== 'FINALIZADA' &&
+             corridaAtual.status !== 'CANCELADA' && (
               <Marker
                 coordinate={{
-                  latitude:
-                    corridaAtual.destino_latitude,
-
-                  longitude:
-                    corridaAtual.destino_longitude,
+                  latitude: corridaAtual.destino_latitude,
+                  longitude: corridaAtual.destino_longitude,
                 }}
                 title="Destino"
-                description={
-                  corridaAtual.destino
-                }
+                description={corridaAtual.destino}
+              />
+            )}
+
+            {/* Marcador do motorista */}
+            {corridaAtual?.motorista &&
+              corridaAtual.motorista.latitude !== null &&
+              corridaAtual.motorista.longitude !== null && (
+                <Marker
+                  coordinate={{
+                    latitude: corridaAtual.motorista.latitude,
+                    longitude: corridaAtual.motorista.longitude,
+                  }}
+                  title={corridaAtual.motorista.nome || 'Motorista'}
+                  description="Motorista"
+                />
+              )}
+
+            {/* Rota pela rua */}
+            {rota.length > 0 && (
+              <Polyline
+                coordinates={rota}
+                strokeWidth={5}
+                strokeColor="#111827"
               />
             )}
           </MapView>
@@ -579,8 +861,56 @@ export default function Cliente() {
           PAINEL INFERIOR
           ====================================================== */}
 
-      <View style={styles.painelInferior}>
+      <View
+        style={[
+          styles.painelInferior,
+          painelExpandido
+            ? styles.painelExpandido
+            : styles.painelRecolhido,
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.alcaPainel}
+          onPress={() => setPainelExpandido((anterior) => !anterior)}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={
+            painelExpandido
+              ? 'Recolher detalhes da corrida'
+              : 'Expandir detalhes da corrida'
+          }
+        >
+          <View style={styles.alcaVisual} />
 
+          <View style={styles.cabecalhoPainel}>
+            <View style={styles.resumoPainel}>
+              <Text style={styles.resumoTitulo}>
+                {corridaAtual ? 'Minha corrida' : 'Vamos viajar?'}
+              </Text>
+
+              <Text style={styles.resumoStatus} numberOfLines={1}>
+                {corridaAtual
+                  ? textoStatus(corridaAtual.status)
+                  : 'Solicite uma corrida para seu destino'}
+              </Text>
+            </View>
+
+            <View style={styles.botaoExpandir}>
+              <Text style={styles.setaPainel}>
+                {painelExpandido ? '⌄' : '⌃'}
+              </Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {painelExpandido && (
+          <ScrollView
+            style={styles.conteudoPainelExpandido}
+            contentContainerStyle={styles.painelConteudo}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled
+          >
+            {/* Mantenha aqui o conteúdo atual do painel */}
         {corridaAtual ? (
           <>
             {/* ==================================================
@@ -734,7 +1064,17 @@ export default function Cliente() {
                     Aguardando informações do motorista...
                   </Text>
                 )}
-
+                {corridaAtual.status === 'ACEITA' && (
+                  <TouchableOpacity
+                    style={styles.botaoAcompanharMotorista}
+                    onPress={() => router.push('/acompanhar-motorista')}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.botaoAcompanharMotoristaTexto}>
+                      📍 Acompanhar chegada do motorista
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
 
@@ -867,9 +1207,10 @@ export default function Cliente() {
             </TouchableOpacity>
           </>
         )}
-
+        </ScrollView>
+        )}
       </View>
-
+        
     </View>
   );
 }
@@ -969,43 +1310,111 @@ const styles = StyleSheet.create({
   },
 
   /*
-   * PAINEL INFERIOR
-   */
-
+  * PAINEL INFERIOR
+  */
+    
   painelInferior: {
     position: 'absolute',
-
     left: 0,
     right: 0,
     bottom: 0,
 
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
 
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+    paddingBottom: 18,
 
-    paddingHorizontal: 20,
-    paddingTop: 22,
-    paddingBottom: 30,
-
-    elevation: 10,
-
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 10,
+    elevation: 14,
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
     shadowOffset: {
       width: 0,
-      height: -3,
+      height: -4,
     },
+
+    overflow: 'hidden',
   },
 
-  tituloPainel: {
-    fontSize: 20,
+  painelRecolhido: {
+    height: 112,
+  },
+
+  painelExpandido: {
+    height: '58%',
+  },
+
+  alcaPainel: {
+    paddingBottom: 12,
+  },
+
+  alcaVisual: {
+    width: 42,
+    height: 5,
+    borderRadius: 10,
+    backgroundColor: '#D1D5DB',
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+
+  cabecalhoPainel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  resumoPainel: {
+    flex: 1,
+    marginRight: 12,
+  },
+
+  resumoTitulo: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#111827',
+  },
+
+  resumoStatus: {
+    marginTop: 4,
+    fontSize: 14,
+    color: '#0F766E',
+    fontWeight: '600',
+  },
+
+  botaoExpandir: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  setaPainel: {
+    fontSize: 25,
     fontWeight: '700',
-    color: '#111',
-    marginBottom: 8,
+    color: '#374151',
+    lineHeight: 29,
   },
 
+  conteudoPainelExpandido: {
+    flexShrink: 1,
+  },
+
+  painelConteudo: {
+    paddingBottom: 20,
+  },
+     
+  tituloPainel: {
+    fontSize: 21,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 10,
+  },
+  
   descricaoPainel: {
     fontSize: 14,
     color: '#666',
@@ -1013,16 +1422,13 @@ const styles = StyleSheet.create({
   },
 
   /*
-   * STATUS
-   */
+  * STATUS
+  */
 
   statusContainer: {
     backgroundColor: '#eef6ff',
-
     borderRadius: 12,
-
     padding: 14,
-
     marginTop: 8,
     marginBottom: 10,
   },
@@ -1359,5 +1765,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#047857',
   },
+    
+  botaoAcompanharMotorista: {
+    marginTop: 12,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: '#0F766E',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
+  botaoAcompanharMotoristaTexto: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
 });
