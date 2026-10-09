@@ -11,6 +11,11 @@ import * as SecureStore from 'expo-secure-store';
 import { api } from '../services/api';
 
 import {
+  conectarSocket,
+  desconectarSocket,
+} from '../services/socket';
+
+import {
   CadastroData,
   LoginData,
   LoginResponse,
@@ -65,27 +70,22 @@ export function AuthProvider({
         await SecureStore.getItemAsync('usuario');
 
       if (tokenSalvo && usuarioSalvo) {
-
-        const usuarioParseado: Usuario =
-          JSON.parse(usuarioSalvo);
+        const usuarioParseado: Usuario = JSON.parse(usuarioSalvo);
 
         setToken(tokenSalvo);
-
         setUsuario(usuarioParseado);
 
-        api.defaults.headers.common.Authorization =
-          `Bearer ${tokenSalvo}`;
+        api.defaults.headers.common.Authorization = `Bearer ${tokenSalvo}`;
+
+        conectarSocket(tokenSalvo);
       }
 
     } catch (error) {
-
       console.error(
         'Erro ao carregar sessão:',
         error
       );
-
     } finally {
-
       setCarregando(false);
     }
   }
@@ -167,6 +167,8 @@ export function AuthProvider({
       // ------------------------------------------------------
       // ATUALIZA ESTADO
       // ------------------------------------------------------
+      
+      conectarSocket(dados.token);
 
       setToken(dados.token);
 
@@ -217,32 +219,19 @@ export function AuthProvider({
 
     try {
 
-      await SecureStore.deleteItemAsync(
-        'token'
-      );
-
-      await SecureStore.deleteItemAsync(
-        'refreshToken'
-      );
-
-      await SecureStore.deleteItemAsync(
-        'usuario'
-      );
+      desconectarSocket();
+      await SecureStore.deleteItemAsync('token');
+      await SecureStore.deleteItemAsync('refreshToken');
+      await SecureStore.deleteItemAsync('usuario');
 
       delete api.defaults.headers.common.Authorization;
 
       setToken(null);
-
       setUsuario(null);
 
     } catch (error) {
-
-      console.error(
-        'Erro ao realizar logout:',
-        error
-      );
-
-      throw error;
+        console.error('Erro ao realizar logout:', error);
+        throw error;
     }
   }
 
