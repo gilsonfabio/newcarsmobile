@@ -1,4 +1,4 @@
-import React, {
+import {
   useCallback,
   useEffect,
   useState,
@@ -18,6 +18,8 @@ import {
   router,
   useLocalSearchParams,
 } from 'expo-router';
+
+import * as Location from 'expo-location';
 
 import { api } from '../services/api';
 
@@ -45,15 +47,18 @@ export default function ConfirmarCorrida() {
    *
    * latitude
    * longitude
+   * origem (opcional: endereço já resolvido)
    * destino
    * destino_latitude
    * destino_longitude
    *
-   * Portanto usamos exatamente esses nomes aqui.
+   * Se o endereço da origem não vier nos parâmetros,
+   * tentamos obtê-lo a partir das coordenadas do GPS.
    */
   const params = useLocalSearchParams<{
     latitude?: string;
     longitude?: string;
+    origem?: string;
     destino?: string;
     destino_latitude?: string;
     destino_longitude?: string;
@@ -75,6 +80,7 @@ export default function ConfirmarCorrida() {
     'destino_longitude:',
     params.destino_longitude
   );
+  console.log('origem recebida:', params.origem);
   console.log('destino:', params.destino);
   console.log('=================================');
 
@@ -95,6 +101,89 @@ export default function ConfirmarCorrida() {
   );
 
   const destino = params.destino ?? '';
+
+  const [origemEndereco, setOrigemEndereco] =
+    useState((params.origem ?? '').trim());
+
+  /*
+   * Obtém o endereço da origem usando o GPS.
+   * Se a tela anterior já enviou o endereço, preserva-o.
+   */
+  useEffect(() => {
+    let ativo = true;
+
+    const resolverEnderecoOrigem = async () => {
+      const origemInformada =
+        typeof params.origem === 'string'
+          ? params.origem.trim()
+          : '';
+
+      if (origemInformada) {
+        setOrigemEndereco(origemInformada);
+        return;
+      }
+
+      if (
+        !Number.isFinite(origemLatitude) ||
+        !Number.isFinite(origemLongitude) ||
+        origemLatitude < -90 ||
+        origemLatitude > 90 ||
+        origemLongitude < -180 ||
+        origemLongitude > 180
+      ) {
+        setOrigemEndereco('');
+        return;
+      }
+
+      try {
+        const resultados = await Location.reverseGeocodeAsync({
+          latitude: origemLatitude,
+          longitude: origemLongitude,
+        });
+
+        const endereco = resultados[0];
+
+        const textoEndereco = endereco
+          ? [
+              endereco.street,
+              endereco.streetNumber,
+              endereco.district,
+              endereco.city,
+              endereco.region,
+              endereco.postalCode,
+              endereco.country,
+            ]
+                .filter(Boolean)
+                .join(', ')
+          : '';
+
+        if (ativo) {
+          setOrigemEndereco(
+            textoEndereco ||
+              `Localização atual (${origemLatitude.toFixed(6)}, ${origemLongitude.toFixed(6)})`
+          );
+        }
+      } catch (error) {
+        console.warn(
+          'Não foi possível converter as coordenadas da origem em endereço:',
+          error
+        );
+
+        if (ativo) {
+          // Fallback para nunca enviar origem como undefined.
+          setOrigemEndereco(
+            `Localização atual (${origemLatitude.toFixed(6)}, ${origemLongitude.toFixed(6)})`
+          );
+        }
+      }
+    };
+
+    resolverEnderecoOrigem();
+
+    return () => {
+      ativo = false;
+    };
+  }, [params.origem, origemLatitude, origemLongitude]);
 
   const [estimativa, setEstimativa] =
     useState<Estimativa | null>(null);
@@ -213,6 +302,11 @@ export default function ConfirmarCorrida() {
       console.log(
         'destinoLongitude:',
         destinoLongitude
+      );
+
+      console.log(
+        'origemEndereco:',
+        origemEndereco
       );
 
       console.log(
@@ -402,6 +496,7 @@ export default function ConfirmarCorrida() {
       destinoLatitude,
       destinoLongitude,
       destino,
+      origemEndereco,
     ]);
 
   useEffect(() => {
@@ -486,10 +581,18 @@ export default function ConfirmarCorrida() {
          * O backend calcula novamente
          * esses valores.
          */
+        const enderecoOrigem =
+          origemEndereco.trim() ||
+          `Localização atual (${origemLatitude.toFixed(6)}, ${origemLongitude.toFixed(6)})`;
+
+        console.log('Endereço origem enviado:', enderecoOrigem);
+
         const response =
           await api.post(
             '/corridas',
             {
+              origem: enderecoOrigem,
+
               origem_latitude:
                 origemLatitude,
 
@@ -727,6 +830,31 @@ export default function ConfirmarCorrida() {
               Escolha seu veículo
             </Text>
           </View>
+        </View>
+
+        {/* ORIGEM */}
+
+        <View
+          style={
+            styles.originCard
+          }
+        >
+          <Text
+            style={
+              styles.originLabel
+            }
+          >
+            ORIGEM
+          </Text>
+
+          <Text
+            style={
+              styles.originText
+            }
+            numberOfLines={3}
+          >
+            {origemEndereco || 'Obtendo endereço da localização atual...'}
+          </Text>
         </View>
 
         {/* DESTINO */}
@@ -1190,6 +1318,30 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontSize: 14,
     color: '#64748b',
+  },
+
+  originCard: {
+    backgroundColor: '#f0fdf4',
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    marginBottom: 14,
+  },
+
+  originLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#15803d',
+    letterSpacing: 0.8,
+    marginBottom: 7,
+  },
+
+  originText: {
+    fontSize: 16,
+    lineHeight: 23,
+    fontWeight: '600',
+    color: '#14532d',
   },
 
   destinationCard: {

@@ -1,6 +1,7 @@
 import {
     ActivityIndicator,
     Alert,
+    AppState,
     RefreshControl,
     ScrollView,
     StyleSheet,
@@ -25,31 +26,20 @@ import { api } from '../services/api';
 interface Corrida {
     id: string;
     cliente_id: string;
-
     origem_latitude: number;
     origem_longitude: number;
-
     destino: string;
     destino_latitude: number;
     destino_longitude: number;
-
     motorista_id: string | null;
-
     status: string;
-
     valor: number | null;
 }
 
 export default function Motorista() {
-
     const { usuario, logout } = useAuth();
 
-    // ==========================================================
-    // DADOS DO MOTORISTA
-    // ==========================================================
-
     const motorista = usuario?.motorista;
-
     const veiculo = motorista?.veiculo;
 
     // ==========================================================
@@ -57,115 +47,130 @@ export default function Motorista() {
     // ==========================================================
 
     const [online, setOnline] = useState(
-        motorista?.online ?? false
+        Boolean(motorista?.online ?? false)
     );
 
-    const [corridas, setCorridas] = useState<Corrida[]>([]);
+    const saindoRef = useRef(false);
 
+    const [corridas, setCorridas] = useState<Corrida[]>([]);
     const [corridaAtual, setCorridaAtual] =
         useState<Corrida | null>(null);
 
-    const [carregando, setCarregando] =
-        useState(false);
-
-    const [processando, setProcessando] =
-        useState<string | null>(null);
-
-    /*
-     * Guarda a última corrida conhecida.
-     *
-     * É usada para detectar quando uma corrida
-     * ACEITA ou EM_ANDAMENTO desapareceu.
-     */
-    const corridaAnteriorRef =
-        useRef<Corrida | null>(null);
-
-    /*
-     * Impede duas requisições de polling
-     * acontecendo simultaneamente.
-     */
-    const pollingEmAndamentoRef =
-        useRef(false);
-
-    /*
-     * Controla se o componente ainda está montado.
-     */
-    const componenteAtivoRef =
-        useRef(true);
+    const [carregando, setCarregando] = useState(false);
+    const [processando, setProcessando] = useState<string | null>(null);
 
     // ==========================================================
-    // SINCRONIZAR STATUS ONLINE DO USUÁRIO
+    // REFERÊNCIAS
+    // ==========================================================
+
+    const appAtivoRef = useRef(
+        AppState.currentState === 'active'
+    );
+
+    const corridaAnteriorRef = useRef<Corrida | null>(null);
+    const pollingEmAndamentoRef = useRef(false);
+    const componenteAtivoRef = useRef(true);
+
+    // ==========================================================
+    // STATUS DO MOTORISTA
+    // Valores válidos: PENDENTE, APROVADO, BLOQUEADO
+    // ==========================================================
+
+    const statusMotorista = String(
+        motorista?.status ?? ''
+    ).toUpperCase();
+
+    const motoristaAprovado =
+        statusMotorista === 'APROVADO';
+
+    const motoristaPendente =
+        statusMotorista === 'PENDENTE';
+
+    const motoristaBloqueado =
+        statusMotorista === 'BLOQUEADO';
+
+    // ==========================================================
+    // ESTADO DO APLICATIVO
     // ==========================================================
 
     useEffect(() => {
+        const subscription = AppState.addEventListener(
+            'change',
+            (nextAppState) => {
+                const estavaAtivo = appAtivoRef.current;
+                const estaAtivo = nextAppState === 'active';
 
+                appAtivoRef.current = estaAtivo;
+
+                if (!estavaAtivo && estaAtivo) {
+                    console.log(
+                        'Aplicativo voltou ao primeiro plano.'
+                    );
+                }
+            }
+        );
+
+        return () => {
+            subscription.remove();
+        };
+    }, []);
+
+    // ==========================================================
+    // SINCRONIZAR STATUS ONLINE
+    // ==========================================================
+
+    useEffect(() => {
         if (motorista) {
-
-            setOnline(
-                Boolean(motorista.online)
-            );
+            setOnline(Boolean(motorista.online));
         }
-
     }, [motorista]);
 
     // ==========================================================
-    // ATUALIZAR LOCALIZAÇÃO NO BACKEND
+    // ENVIAR LOCALIZAÇÃO
     // ==========================================================
 
     const enviarLocalizacao = useCallback(
-        async (marcarOnline = false) => {
-
+        async (marcarOnline = false): Promise<boolean> => {
             try {
+                if (!appAtivoRef.current) {
+                    return false;
+                }
 
                 const { status } =
                     await Location.requestForegroundPermissionsAsync();
 
                 if (status !== 'granted') {
-
-                    console.log(
-                        'Permissão de localização não concedida.'
-                    );
-
                     if (marcarOnline) {
-
                         Alert.alert(
                             'Localização necessária',
-                            'É necessário permitir o acesso à localização para ficar online.'
+                            'Permita o acesso à localização para ficar online.'
                         );
                     }
 
                     return false;
                 }
 
+                if (!appAtivoRef.current) {
+                    return false;
+                }
+
                 const localizacao =
                     await Location.getCurrentPositionAsync({
-                        accuracy:
-                            Location.Accuracy.High,
+                        accuracy: Location.Accuracy.High,
                     });
 
-                const latitude =
-                    localizacao.coords.latitude;
+                if (!appAtivoRef.current) {
+                    return false;
+                }
 
-                const longitude =
-                    localizacao.coords.longitude;
-
-                console.log(
-                    'Localização motorista:',
-                    latitude,
-                    longitude
+                const response = await api.put(
+                    '/motoristas/localizacao',
+                    {
+                        latitude: localizacao.coords.latitude,
+                        longitude: localizacao.coords.longitude,
+                        ...(marcarOnline ? { online: true } : {}),
+                    }
                 );
-
-                const response =
-                    await api.put(
-                        '/motoristas/localizacao',
-                        {
-                            latitude,
-                            longitude,
-                            ...(marcarOnline
-                                ? { online: true }
-                                : {}),
-                        }
-                    );
 
                 console.log(
                     'Localização enviada:',
@@ -173,26 +178,22 @@ export default function Motorista() {
                 );
 
                 return true;
-
             } catch (error: any) {
-
                 console.error(
                     'Erro ao atualizar localização:',
                     error?.response?.data || error
                 );
 
                 if (marcarOnline) {
-
                     Alert.alert(
                         'Erro',
                         error?.response?.data?.error ||
-                        'Não foi possível ativar o modo online.'
+                            'Não foi possível ativar o modo online.'
                     );
                 }
 
                 return false;
             }
-
         },
         []
     );
@@ -200,9 +201,8 @@ export default function Motorista() {
     // ==========================================================
     // LOGOUT
     // ==========================================================
-
+       
     const handleLogout = () => {
-
         Alert.alert(
             'Sair',
             'Deseja realmente sair do aplicativo?',
@@ -214,12 +214,22 @@ export default function Motorista() {
                 {
                     text: 'Sair',
                     style: 'destructive',
-
                     onPress: async () => {
+                        if (saindoRef.current) {
+                            return;
+                        }
 
-                        await logout();
+                        // Bloqueia novas operações antes de remover o token.
+                        saindoRef.current = true;
+                        componenteAtivoRef.current = false;
 
-                        router.replace('/login');
+                        try {
+                            await logout();
+                        } catch (error) {
+                            console.error('Erro ao sair da conta:', error);
+                        } finally {
+                            router.replace('/login');
+                        }
                     },
                 },
             ]
@@ -230,225 +240,251 @@ export default function Motorista() {
     // BUSCAR CORRIDAS DISPONÍVEIS
     // ==========================================================
 
-    const carregarCorridas =
-        useCallback(async () => {
+    const carregarCorridas = useCallback(async () => {
+        if (!componenteAtivoRef.current || !appAtivoRef.current) {
+            return;
+        }
 
-            /*
-             * Só procura corridas se o motorista
-             * estiver online.
-             */
-            if (!online) {
+        if (
+            !appAtivoRef.current ||
+            !online ||
+            !motoristaAprovado
+        ) {
+            return;
+        }
+
+        try {
+            if (componenteAtivoRef.current) {
+                setCarregando(true);
+            }
+
+            const response = await api.get(
+                '/corridas/disponiveis'
+            );
+
+            const lista: Corrida[] =
+                response.data?.corridas ?? [];
+
+            if (
+                componenteAtivoRef.current &&
+                appAtivoRef.current
+            ) {
+                setCorridas(lista);
+            }
+        } catch (error: any) {
+            const status = error?.response?.status;
+            const mensagem = error?.response?.data?.error;
+
+            if (
+                !appAtivoRef.current &&
+                (
+                    status === 401 ||
+                    mensagem === 'Token não informado.' ||
+                    mensagem === 'Token inválido.'
+                )
+            ) {
                 return;
             }
 
-            try {
-
-                setCarregando(true);
-
-                const response =
-                    await api.get(
-                        '/corridas/disponiveis'
-                    );
-
-                const lista =
-                    response.data?.corridas ?? [];
-
-                if (componenteAtivoRef.current) {
-
-                    setCorridas(lista);
-                }
-
-            } catch (error: any) {
-
-                console.error(
-                    'Erro ao buscar corridas:',
-                    error?.response?.data || error
-                );
-
-            } finally {
-
-                if (componenteAtivoRef.current) {
-
-                    setCarregando(false);
-                }
+            console.error(
+                'Erro ao buscar corridas:',
+                error?.response?.data || error
+            );
+        } finally {
+            if (componenteAtivoRef.current) {
+                setCarregando(false);
             }
-
-        }, [online]);
+        }
+    }, [online, motoristaAprovado]);
 
     // ==========================================================
     // BUSCAR MINHA CORRIDA
     // ==========================================================
 
-    const carregarMinhaCorrida =
-        useCallback(async () => {
+    const carregarMinhaCorrida = useCallback(async () => {
+        if (
+            saindoRef.current ||
+            !componenteAtivoRef.current ||
+            !appAtivoRef.current ||
+            pollingEmAndamentoRef.current
+        ) {
+            return;
+        }
 
-            if (pollingEmAndamentoRef.current) {
+        pollingEmAndamentoRef.current = true;
+
+        try {
+            const response = await api.get('/corridas/minha');
+
+            // Não atualiza o estado depois que o logout começou.
+            if (
+                saindoRef.current ||
+                !componenteAtivoRef.current ||
+                !appAtivoRef.current
+            ) {
                 return;
             }
 
-            pollingEmAndamentoRef.current =
-                true;
+            const corrida: Corrida | null =
+                response.data?.corrida ?? null;
 
-            try {
+            const corridaAnterior = corridaAnteriorRef.current;
 
-                const response =
-                    await api.get(
-                        '/corridas/minha'
-                    );
+            const clienteCancelou = Boolean(
+                corridaAnterior &&
+                !corrida &&
+                (
+                    corridaAnterior.status === 'ACEITA' ||
+                    corridaAnterior.status === 'EM_ANDAMENTO'
+                )
+            );
 
-                const corrida =
-                    response.data?.corrida ?? null;
+            if (clienteCancelou) {
+                console.log('Corrida cancelada:', corridaAnterior?.id);
 
-                const corridaAnterior =
-                    corridaAnteriorRef.current;
+                setCorridaAtual(null);
+                corridaAnteriorRef.current = null;
 
-                /*
-                 * ==================================================
-                 * DETECTAR CANCELAMENTO
-                 * ==================================================
-                 */
-
-                const clienteCancelou =
-                    corridaAnterior &&
-                    !corrida &&
-                    (
-                        corridaAnterior.status ===
-                            'ACEITA' ||
-                        corridaAnterior.status ===
-                            'EM_ANDAMENTO'
-                    );
-
-                if (clienteCancelou) {
-
-                    console.log(
-                        'Cliente cancelou a corrida:',
-                        corridaAnterior.id
-                    );
-
-                    if (componenteAtivoRef.current) {
-
-                        setCorridaAtual(null);
-
-                        corridaAnteriorRef.current =
-                            null;
-
-                        Alert.alert(
-                            'Corrida cancelada',
-                            'O cliente cancelou a corrida.'
-                        );
-                    }
-
-                    if (online) {
-
-                        await carregarCorridas();
-                    }
-
-                    return;
-                }
-
-                /*
-                 * Atualiza corrida atual.
-                 */
-
-                if (componenteAtivoRef.current) {
-
-                    setCorridaAtual(
-                        corrida
-                    );
-
-                    corridaAnteriorRef.current =
-                        corrida;
-
-                    console.log(
-                        'Minha corrida:',
-                        corrida
-                    );
-                }
-
-            } catch (error: any) {
-
-                console.error(
-                    'Erro ao buscar minha corrida:',
-                    error?.response?.data || error
+                Alert.alert(
+                    'Corrida cancelada',
+                    'O cliente cancelou a corrida.'
                 );
 
-            } finally {
-
-                pollingEmAndamentoRef.current =
-                    false;
+                return;
             }
 
-        }, [
-            online,
-            carregarCorridas,
-        ]);
+            setCorridaAtual(corrida);
+            corridaAnteriorRef.current = corrida;
+        } catch (error: any) {
+            // Uma requisição iniciada antes do logout pode terminar depois dele.
+            if (saindoRef.current || !componenteAtivoRef.current) {
+                return;
+            }
+
+            const status = error?.response?.status;
+            const mensagem = error?.response?.data?.error;
+
+            if (
+                !appAtivoRef.current &&
+                (
+                    status === 401 ||
+                    mensagem === 'Token não informado.' ||
+                    mensagem === 'Token inválido.'
+                )
+            ) {
+                return;
+            }
+
+            console.error(
+                'Erro ao buscar minha corrida:',
+                error?.response?.data || error
+            );
+        } finally {
+            pollingEmAndamentoRef.current = false;
+        }
+    }, []);
 
     // ==========================================================
-    // POLLING
+    // POLLING DE CORRIDAS
     // ==========================================================
-
+        
     useEffect(() => {
-
-        componenteAtivoRef.current =
-            true;
+        componenteAtivoRef.current = true;
 
         let cancelado = false;
+        let timeout: ReturnType<typeof setTimeout> | null = null;
+        let executando = false;
 
-        let timeout:
-            ReturnType<typeof setTimeout> | null =
-            null;
+        const limparTimeout = () => {
+            if (timeout) {
+                clearTimeout(timeout);
+                timeout = null;
+            }
+        };
 
-        const executarPolling =
-            async () => {
+        const executarPolling = async () => {
+            if (
+                cancelado ||
+                saindoRef.current ||
+                !componenteAtivoRef.current ||
+                !appAtivoRef.current ||
+                executando
+            ) {
+                return;
+            }
 
-                if (cancelado) {
-                    return;
-                }
+            executando = true;
 
+            try {
                 await carregarMinhaCorrida();
 
-                if (cancelado) {
+                if (
+                    cancelado ||
+                    !componenteAtivoRef.current ||
+                    !appAtivoRef.current
+                ) {
                     return;
                 }
 
                 if (
                     online &&
+                    motoristaAprovado &&
                     !corridaAnteriorRef.current
                 ) {
-
                     await carregarCorridas();
                 }
+            } catch (error) {
+                console.error('Erro no polling do motorista:', error);
+            } finally {
+                executando = false;
 
-                if (cancelado) {
-                    return;
+                if (
+                    !cancelado &&
+                    !saindoRef.current &&
+                    componenteAtivoRef.current &&
+                    appAtivoRef.current
+                ) {
+                    timeout = setTimeout(executarPolling, 3000);
                 }
-
-                timeout =
-                    setTimeout(
-                        executarPolling,
-                        3000
-                    );
-            };
-
-        executarPolling();
-
-        return () => {
-
-            cancelado = true;
-
-            componenteAtivoRef.current =
-                false;
-
-            if (timeout) {
-
-                clearTimeout(timeout);
             }
         };
 
+        const subscription = AppState.addEventListener(
+            'change',
+            (estado) => {
+                const ativo = estado === 'active';
+
+                appAtivoRef.current = ativo;
+
+                if (!ativo) {
+                    limparTimeout();
+                    return;
+                }
+
+                limparTimeout();
+                executarPolling();
+            }
+        );
+
+        if (AppState.currentState === 'active') {
+            appAtivoRef.current = true;
+            executarPolling();
+        } else {
+            appAtivoRef.current = false;
+        }
+
+        return () => {
+            cancelado = true;
+            componenteAtivoRef.current = false;
+
+            limparTimeout();
+            subscription.remove();
+        };
     }, [
         carregarMinhaCorrida,
         carregarCorridas,
         online,
+        motoristaAprovado,
     ]);
 
     // ==========================================================
@@ -456,88 +492,56 @@ export default function Motorista() {
     // ==========================================================
 
     const alternarOnline = async () => {
-
-        // ==========================================================
-        // VERIFICAR STATUS DO MOTORISTA
-        // ==========================================================
-
         if (!motorista) {
-
             Alert.alert(
                 'Erro',
                 'Não foi possível identificar os dados do motorista.'
             );
-
             return;
         }
 
-        // ==========================================================
-        // MOTORISTA PENDENTE
-        // ==========================================================
+        const status = String(
+            motorista.status ?? ''
+        ).toUpperCase();
 
-        if (motorista.status === 'PENDENTE') {
-
+        if (status === 'PENDENTE') {
             Alert.alert(
                 'Cadastro em análise',
-                'Seu cadastro ainda está em análise. Aguarde a aprovação para começar a receber corridas.'
+                'Aguarde a aprovação do cadastro para começar a receber corridas.'
             );
-
             return;
         }
 
-        // ==========================================================
-        // MOTORISTA BLOQUEADO
-        // ==========================================================
-
-        if (motorista.status === 'BLOQUEADO') {
-
+        if (status === 'BLOQUEADO') {
             Alert.alert(
                 'Motorista bloqueado',
-                'Seu cadastro está bloqueado. Entre em contato com o suporte para obter mais informações.'
+                'Entre em contato com o suporte para obter mais informações.'
             );
-
             return;
         }
 
-        // ==========================================================
-        // MOTORISTA PRECISA ESTAR ATIVO
-        // ==========================================================
-
-        if (motorista.status !== 'ATIVO') {
-
+        if (status !== 'APROVADO') {
             Alert.alert(
                 'Cadastro não autorizado',
                 'Seu cadastro ainda não está autorizado para receber corridas.'
             );
-
             return;
         }
 
-        // ==========================================================
         // FICAR OFFLINE
-        // ==========================================================
-
         if (online) {
-
             try {
+                setCarregando(true);
 
-                await api.put(
-                    '/motoristas/localizacao',
-                    {
-                        online: false,
-                    }
-                );
+                await api.put('/motoristas/localizacao', {
+                    online: false,
+                });
 
                 setOnline(false);
-
                 setCorridas([]);
 
-                console.log(
-                    'Motorista ficou offline.'
-                );
-
+                console.log('Motorista ficou offline.');
             } catch (error: any) {
-
                 console.error(
                     'Erro ao ficar offline:',
                     error?.response?.data || error
@@ -546,437 +550,335 @@ export default function Motorista() {
                 Alert.alert(
                     'Erro',
                     error?.response?.data?.error ||
-                    'Não foi possível ficar offline.'
+                        'Não foi possível ficar offline.'
                 );
+            } finally {
+                setCarregando(false);
             }
 
             return;
         }
 
-        // ==========================================================
         // FICAR ONLINE
-        // ==========================================================
-
         setCarregando(true);
 
-        const sucesso =
-            await enviarLocalizacao(true);
+        const sucesso = await enviarLocalizacao(true);
 
-        if (!sucesso) {
-
-            setCarregando(false);
-
-            return;
+        if (sucesso) {
+            setOnline(true);
+            console.log('Motorista ficou online.');
         }
 
-        setOnline(true);
-
         setCarregando(false);
-
-        console.log(
-            'Motorista ficou online.'
-        );
     };
 
     // ==========================================================
     // ACEITAR CORRIDA
     // ==========================================================
 
-    const aceitarCorrida =
-        async (corridaId: string) => {
+    const aceitarCorrida = async (corridaId: string) => {
+        try {
+            setProcessando(corridaId);
 
-            try {
+            const response = await api.put(
+                `/corridas/${corridaId}/aceitar`
+            );
 
-                setProcessando(
-                    corridaId
+            const corridaAceita: Corrida | undefined =
+                response.data?.corrida;
+
+            if (!corridaAceita) {
+                throw new Error(
+                    'Corrida não retornada pela API.'
                 );
-
-                const response =
-                    await api.put(
-                        `/corridas/${corridaId}/aceitar`
-                    );
-
-                const corridaAceita =
-                    response.data?.corrida;
-
-                if (!corridaAceita) {
-
-                    throw new Error(
-                        'Corrida não retornada pela API.'
-                    );
-                }
-
-                setCorridaAtual(
-                    corridaAceita
-                );
-
-                corridaAnteriorRef.current =
-                    corridaAceita;
-
-                setCorridas((lista) =>
-                    lista.filter(
-                        (corrida) =>
-                            corrida.id !==
-                            corridaId
-                    )
-                );
-
-                Alert.alert(
-                    'Corrida aceita',
-                    'A corrida foi atribuída a você.'
-                );
-
-            } catch (error: any) {
-
-                console.error(
-                    'Erro ao aceitar corrida:',
-                    error?.response?.data || error
-                );
-
-                Alert.alert(
-                    'Erro',
-                    error?.response?.data?.error ||
-                    'Não foi possível aceitar a corrida.'
-                );
-
-                if (online) {
-
-                    await carregarCorridas();
-                }
-
-            } finally {
-
-                setProcessando(null);
             }
-        };
+
+            setCorridaAtual(corridaAceita);
+            corridaAnteriorRef.current = corridaAceita;
+
+            setCorridas(lista =>
+                lista.filter(corrida => corrida.id !== corridaId)
+            );
+
+            Alert.alert(
+                'Corrida aceita',
+                'A corrida foi atribuída a você.'
+            );
+        } catch (error: any) {
+            console.error(
+                'Erro ao aceitar corrida:',
+                error?.response?.data || error
+            );
+
+            Alert.alert(
+                'Erro',
+                error?.response?.data?.error ||
+                    'Não foi possível aceitar a corrida.'
+            );
+
+            if (online && appAtivoRef.current) {
+                await carregarCorridas();
+            }
+        } finally {
+            setProcessando(null);
+        }
+    };
 
     // ==========================================================
     // INICIAR CORRIDA
     // ==========================================================
 
-    const iniciarCorrida =
-        async (corridaId: string) => {
+    const iniciarCorrida = async (corridaId: string) => {
+        try {
+            setProcessando(corridaId);
 
-            try {
+            const response = await api.put(
+                `/corridas/${corridaId}/iniciar`
+            );
 
-                setProcessando(
-                    corridaId
+            const corridaAtualizada: Corrida | undefined =
+                response.data?.corrida;
+
+            if (!corridaAtualizada) {
+                throw new Error(
+                    'A API não retornou a corrida atualizada.'
                 );
-
-                const response =
-                    await api.put(
-                        `/corridas/${corridaId}/iniciar`
-                    );
-
-                console.log(
-                    'Resposta iniciar corrida:',
-                    response.data
-                );
-
-                const corridaAtualizada =
-                    response.data?.corrida;
-
-                if (!corridaAtualizada) {
-
-                    throw new Error(
-                        'A API não retornou a corrida atualizada.'
-                    );
-                }
-
-                setCorridaAtual(
-                    corridaAtualizada
-                );
-
-                corridaAnteriorRef.current =
-                    corridaAtualizada;
-
-                setCorridas((lista) =>
-                    lista.filter(
-                        (corrida) =>
-                            corrida.id !==
-                            corridaId
-                    )
-                );
-
-                Alert.alert(
-                    'Corrida iniciada',
-                    'A corrida está em andamento.'
-                );
-
-            } catch (error: any) {
-
-                console.error(
-                    'Erro ao iniciar corrida:',
-                    error?.response?.data || error
-                );
-
-                Alert.alert(
-                    'Erro',
-                    error?.response?.data?.error ||
-                    'Não foi possível iniciar a corrida.'
-                );
-
-            } finally {
-
-                setProcessando(null);
             }
-        };
+
+            setCorridaAtual(corridaAtualizada);
+            corridaAnteriorRef.current = corridaAtualizada;
+
+            setCorridas(lista =>
+                lista.filter(corrida => corrida.id !== corridaId)
+            );
+
+            Alert.alert(
+                'Corrida iniciada',
+                'A corrida está em andamento.'
+            );
+        } catch (error: any) {
+            console.error(
+                'Erro ao iniciar corrida:',
+                error?.response?.data || error
+            );
+
+            Alert.alert(
+                'Erro',
+                error?.response?.data?.error ||
+                    'Não foi possível iniciar a corrida.'
+            );
+        } finally {
+            setProcessando(null);
+        }
+    };
 
     // ==========================================================
     // FINALIZAR CORRIDA
     // ==========================================================
 
-    const finalizarCorrida =
-        async (corridaId: string) => {
+    const finalizarCorrida = (corridaId: string) => {
+        Alert.alert(
+            'Finalizar corrida',
+            'Deseja realmente finalizar esta corrida?',
+            [
+                {
+                    text: 'Cancelar',
+                    style: 'cancel',
+                },
+                {
+                    text: 'Finalizar',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            setProcessando(corridaId);
 
-            Alert.alert(
-                'Finalizar corrida',
-                'Deseja realmente finalizar esta corrida?',
-                [
-                    {
-                        text: 'Cancelar',
-                        style: 'cancel',
-                    },
-                    {
-                        text: 'Finalizar',
-                        style: 'destructive',
+                            const response = await api.put(
+                                `/corridas/${corridaId}/finalizar`
+                            );
 
-                        onPress: async () => {
+                            const corridaFinalizada: Corrida | undefined =
+                                response.data?.corrida;
 
-                            try {
-
-                                setProcessando(
-                                    corridaId
+                            if (!corridaFinalizada) {
+                                throw new Error(
+                                    'Corrida não retornada pela API.'
                                 );
-
-                                const response =
-                                    await api.put(
-                                        `/corridas/${corridaId}/finalizar`
-                                    );
-
-                                const corridaFinalizada =
-                                    response.data?.corrida;
-
-                                if (!corridaFinalizada) {
-
-                                    throw new Error(
-                                        'Corrida não retornada pela API.'
-                                    );
-                                }
-
-                                setCorridaAtual(
-                                    corridaFinalizada
-                                );
-
-                                corridaAnteriorRef.current =
-                                    corridaFinalizada;
-
-                                Alert.alert(
-                                    'Corrida finalizada',
-                                    'A corrida foi concluída com sucesso.'
-                                );
-
-                            } catch (error: any) {
-
-                                console.error(
-                                    'Erro ao finalizar corrida:',
-                                    error?.response?.data || error
-                                );
-
-                                Alert.alert(
-                                    'Erro',
-                                    error?.response?.data?.error ||
-                                    'Não foi possível finalizar a corrida.'
-                                );
-
-                            } finally {
-
-                                setProcessando(null);
                             }
-                        },
+
+                            setCorridaAtual(corridaFinalizada);
+                            corridaAnteriorRef.current =
+                                corridaFinalizada;
+
+                            Alert.alert(
+                                'Corrida finalizada',
+                                'A corrida foi concluída com sucesso.'
+                            );
+                        } catch (error: any) {
+                            console.error(
+                                'Erro ao finalizar corrida:',
+                                error?.response?.data || error
+                            );
+
+                            Alert.alert(
+                                'Erro',
+                                error?.response?.data?.error ||
+                                    'Não foi possível finalizar a corrida.'
+                            );
+                        } finally {
+                            setProcessando(null);
+                        }
                     },
-                ]
-            );
-        };
+                },
+            ]
+        );
+    };
 
     // ==========================================================
     // STATUS DA CORRIDA
     // ==========================================================
 
-    const textoStatus =
-        (status: string) => {
-
-            switch (status) {
-
-                case 'SOLICITADA':
-                    return 'Solicitada';
-
-                case 'ACEITA':
-                    return 'Aceita';
-
-                case 'EM_ANDAMENTO':
-                    return 'Em andamento';
-
-                case 'FINALIZADA':
-                    return 'Finalizada';
-
-                case 'CANCELADA':
-                    return 'Cancelada';
-
-                default:
-                    return status;
-            }
-        };
+    const textoStatus = (status: string) => {
+        switch (status) {
+            case 'SOLICITADA':
+                return 'Solicitada';
+            case 'ACEITA':
+                return 'Aceita';
+            case 'EM_ANDAMENTO':
+                return 'Em andamento';
+            case 'FINALIZADA':
+                return 'Finalizada';
+            case 'CANCELADA':
+                return 'Cancelada';
+            default:
+                return status;
+        }
+    };
 
     // ==========================================================
-    // REFRESH MANUAL
+    // ATUALIZAR TELA MANUALMENTE
     // ==========================================================
 
-    const atualizarTela =
-        async () => {
+    const atualizarTela = async () => {
+        if (!appAtivoRef.current) {
+            return;
+        }
 
-            await carregarMinhaCorrida();
+        await carregarMinhaCorrida();
 
-            if (
-                online &&
-                !corridaAnteriorRef.current
-            ) {
-
-                await carregarCorridas();
-            }
-        };
+        if (
+            appAtivoRef.current &&
+            online &&
+            motoristaAprovado &&
+            !corridaAnteriorRef.current
+        ) {
+            await carregarCorridas();
+        }
+    };
 
     // ==========================================================
-    // ATUALIZAÇÃO PERIÓDICA DA LOCALIZAÇÃO
+    // ATUALIZAÇÃO AUTOMÁTICA DA LOCALIZAÇÃO
     // ==========================================================
 
     useEffect(() => {
-
-        if (!online) {
+        if (!online || !motoristaAprovado) {
             return;
         }
 
         let cancelado = false;
 
-        const atualizarLocalizacao =
-            async () => {
+        const atualizarLocalizacao = async () => {
+            if (!appAtivoRef.current || cancelado) {
+                return;
+            }
 
-                if (cancelado) {
+            try {
+                const { status } =
+                    await Location.requestForegroundPermissionsAsync();
+
+                if (
+                    status !== 'granted' ||
+                    cancelado ||
+                    !appAtivoRef.current
+                ) {
                     return;
                 }
 
-                try {
+                const localizacao =
+                    await Location.getCurrentPositionAsync({
+                        accuracy: Location.Accuracy.High,
+                    });
 
-                    const { status } =
-                        await Location.requestForegroundPermissionsAsync();
-
-                    if (status !== 'granted') {
-
-                        console.log(
-                            'Permissão de localização não concedida.'
-                        );
-
-                        return;
-                    }
-
-                    const localizacao =
-                        await Location.getCurrentPositionAsync({
-                            accuracy:
-                                Location.Accuracy.High,
-                        });
-
-                    if (cancelado) {
-                        return;
-                    }
-
-                    const latitude =
-                        localizacao.coords.latitude;
-
-                    const longitude =
-                        localizacao.coords.longitude;
-
-                    console.log(
-                        'Atualizando posição:',
-                        latitude,
-                        longitude
-                    );
-
-                    await api.put(
-                        '/motoristas/localizacao',
-                        {
-                            latitude,
-                            longitude,
-                        }
-                    );
-
-                } catch (error: any) {
-
-                    console.error(
-                        'Erro na atualização automática da localização:',
-                        error?.response?.data || error
-                    );
+                if (cancelado || !appAtivoRef.current) {
+                    return;
                 }
-            };
 
-        atualizarLocalizacao();
+                await api.put('/motoristas/localizacao', {
+                    latitude: localizacao.coords.latitude,
+                    longitude: localizacao.coords.longitude,
+                });
+            } catch (error: any) {
+                const status = error?.response?.status;
+                const mensagem = error?.response?.data?.error;
 
-        const intervalo =
-            setInterval(
-                atualizarLocalizacao,
-                15000
-            );
+                if (
+                    !appAtivoRef.current &&
+                    (
+                        status === 401 ||
+                        mensagem === 'Token não informado.' ||
+                        mensagem === 'Token inválido.'
+                    )
+                ) {
+                    return;
+                }
 
-        return () => {
-
-            cancelado = true;
-
-            clearInterval(
-                intervalo
-            );
+                console.error(
+                    'Erro na atualização automática da localização:',
+                    error?.response?.data || error
+                );
+            }
         };
 
-    }, [online]);
+        // Envia a primeira localização imediatamente.
+        atualizarLocalizacao();
+
+        // Atualiza a localização a cada 15 segundos,
+        // somente enquanto o aplicativo estiver ativo.
+        const intervalo = setInterval(() => {
+            if (appAtivoRef.current && !cancelado) {
+                atualizarLocalizacao();
+            }
+        }, 15000);
+
+        return () => {
+            cancelado = true;
+            clearInterval(intervalo);
+        };
+    }, [online, motoristaAprovado]);
 
     // ==========================================================
-    // RENDER
+    // RENDERIZAÇÃO
     // ==========================================================
 
     return (
         <View style={styles.container}>
-
-            {/* ==================================================
-                CABEÇALHO
-            ================================================== */}
-
             <View style={styles.cabecalho}>
-
                 <View>
-
-                    <Text style={styles.titulo}>
-                        Motorista
-                    </Text>
-
+                    <Text style={styles.titulo}>Motorista</Text>
                     <Text style={styles.usuario}>
                         {usuario?.name || 'Motorista'}
                     </Text>
-
                 </View>
 
                 <TouchableOpacity
                     style={styles.botaoSair}
                     onPress={handleLogout}
                 >
-                    <Text style={styles.botaoSairTexto}>
-                        Sair
-                    </Text>
+                    <Text style={styles.botaoSairTexto}>Sair</Text>
                 </TouchableOpacity>
-
             </View>
 
             <ScrollView
-                contentContainerStyle={
-                    styles.conteudo
-                }
+                contentContainerStyle={styles.conteudo}
                 refreshControl={
                     <RefreshControl
                         refreshing={carregando}
@@ -984,265 +886,116 @@ export default function Motorista() {
                     />
                 }
             >
-
-                {/* ==================================================
-                    INFORMAÇÕES DO MOTORISTA
-                ================================================== */}
+                {/* DADOS DO MOTORISTA */}
 
                 {motorista && (
-
-                    <View
-                        style={
-                            styles.cardMotorista
-                        }
-                    >
-
-                        <View
-                            style={
-                                styles.cabecalhoCard
-                            }
-                        >
-
+                    <View style={styles.cardMotorista}>
+                        <View style={styles.cabecalhoCard}>
                             <View>
-
-                                <Text
-                                    style={
-                                        styles.tituloCard
-                                    }
-                                >
+                                <Text style={styles.tituloCard}>
                                     Seus dados
                                 </Text>
-
-                                <Text
-                                    style={
-                                        styles.subtituloCard
-                                    }
-                                >
+                                <Text style={styles.subtituloCard}>
                                     Informações do motorista
                                 </Text>
-
                             </View>
 
                             <View
                                 style={[
                                     styles.badgeAprovacao,
-
-                                    motorista.status ===
-                                        'ATIVO' &&
-                                        styles.badgeAtivo,
-
-                                    motorista.status ===
-                                        'PENDENTE' &&
-                                        styles.badgePendente,
-
-                                    motorista.status ===
-                                        'BLOQUEADO' &&
-                                        styles.badgeBloqueado,
+                                    motoristaAprovado && styles.badgeAtivo,
+                                    motoristaPendente && styles.badgePendente,
+                                    motoristaBloqueado && styles.badgeBloqueado,
                                 ]}
                             >
-
-                                <Text
-                                    style={
-                                        styles.badgeAprovacaoTexto
-                                    }
-                                >
-                                    {motorista.status ===
-                                        'ATIVO'
+                                <Text style={styles.badgeAprovacaoTexto}>
+                                    {motoristaAprovado
                                         ? 'Aprovado'
-                                        : motorista.status ===
-                                            'PENDENTE'
+                                        : motoristaPendente
                                             ? 'Em análise'
-                                            : motorista.status}
+                                            : motoristaBloqueado
+                                                ? 'Bloqueado'
+                                                : 'Não identificado'}
                                 </Text>
-
                             </View>
-
                         </View>
 
                         {veiculo && (
-
                             <>
+                                <View style={styles.divisor} />
 
-                                <View
-                                    style={
-                                        styles.divisor
-                                    }
-                                />
-
-                                <Text
-                                    style={
-                                        styles.labelVeiculo
-                                    }
-                                >
+                                <Text style={styles.labelVeiculo}>
                                     VEÍCULO
                                 </Text>
 
-                                <View
-                                    style={
-                                        styles.veiculoPrincipal
-                                    }
-                                >
-
-                                    <View
-                                        style={
-                                            styles.veiculoIcone
-                                        }
-                                    >
-                                        <Text
-                                            style={
-                                                styles.veiculoIconeTexto
-                                            }
-                                        >
+                                <View style={styles.veiculoPrincipal}>
+                                    <View style={styles.veiculoIcone}>
+                                        <Text style={styles.veiculoIconeTexto}>
                                             🚗
                                         </Text>
                                     </View>
 
-                                    <View
-                                        style={
-                                            styles.veiculoInformacoes
-                                        }
-                                    >
-
-                                        <Text
-                                            style={
-                                                styles.veiculoNome
-                                            }
-                                        >
-                                            {veiculo.marca}{' '}
-                                            {veiculo.modelo}
+                                    <View style={styles.veiculoInformacoes}>
+                                        <Text style={styles.veiculoNome}>
+                                            {veiculo.marca} {veiculo.modelo}
                                         </Text>
 
-                                        <Text
-                                            style={
-                                                styles.veiculoCategoria
-                                            }
-                                        >
-                                            Categoria:{' '}
-                                            {veiculo.categoria}
+                                        <Text style={styles.veiculoCategoria}>
+                                            Categoria: {veiculo.categoria}
                                         </Text>
-
                                     </View>
-
                                 </View>
 
-                                <View
-                                    style={
-                                        styles.detalhesVeiculo
-                                    }
-                                >
-
-                                    <View
-                                        style={
-                                            styles.detalheVeiculo
-                                        }
-                                    >
-
-                                        <Text
-                                            style={
-                                                styles.detalheLabel
-                                            }
-                                        >
+                                <View style={styles.detalhesVeiculo}>
+                                    <View style={styles.detalheVeiculo}>
+                                        <Text style={styles.detalheLabel}>
                                             PLACA
                                         </Text>
-
-                                        <Text
-                                            style={
-                                                styles.detalheValor
-                                            }
-                                        >
+                                        <Text style={styles.detalheValor}>
                                             {veiculo.placa}
                                         </Text>
-
                                     </View>
 
-                                    <View
-                                        style={
-                                            styles.detalheVeiculo
-                                        }
-                                    >
-
-                                        <Text
-                                            style={
-                                                styles.detalheLabel
-                                            }
-                                        >
+                                    <View style={styles.detalheVeiculo}>
+                                        <Text style={styles.detalheLabel}>
                                             COR
                                         </Text>
-
-                                        <Text
-                                            style={
-                                                styles.detalheValor
-                                            }
-                                        >
-                                            {veiculo.cor ||
-                                                'Não informada'}
+                                        <Text style={styles.detalheValor}>
+                                            {veiculo.cor || 'Não informada'}
                                         </Text>
-
                                     </View>
 
-                                    <View
-                                        style={
-                                            styles.detalheVeiculo
-                                        }
-                                    >
-
-                                        <Text
-                                            style={
-                                                styles.detalheLabel
-                                            }
-                                        >
+                                    <View style={styles.detalheVeiculo}>
+                                        <Text style={styles.detalheLabel}>
                                             ANO
                                         </Text>
-
-                                        <Text
-                                            style={
-                                                styles.detalheValor
-                                            }
-                                        >
-                                            {veiculo.ano ||
-                                                'Não informado'}
+                                        <Text style={styles.detalheValor}>
+                                            {veiculo.ano || 'Não informado'}
                                         </Text>
-
                                     </View>
-
                                 </View>
-
                             </>
-
                         )}
-
                     </View>
                 )}
 
-                {/* ==================================================
-                    STATUS ONLINE
-                ================================================== */}
+                {/* STATUS ONLINE / OFFLINE */}
 
                 <View style={styles.cardOnline}>
-
                     <View>
-
-                        <Text style={styles.label}>
-                            Status
-                        </Text>
+                        <Text style={styles.label}>Status</Text>
 
                         <Text
                             style={[
                                 styles.statusOnline,
-                                online
-                                    ? styles.online
-                                    : styles.offline,
+                                online ? styles.online : styles.offline,
                             ]}
                         >
-                            {online
-                                ? '● Online'
-                                : '● Offline'}
+                            {online ? '● Online' : '● Offline'}
                         </Text>
-
                     </View>
 
-                    {motorista?.status === 'ATIVO' ? (
-
+                    {motoristaAprovado ? (
                         <TouchableOpacity
                             style={[
                                 styles.botaoOnline,
@@ -1252,710 +1005,302 @@ export default function Motorista() {
                             ]}
                             onPress={alternarOnline}
                             activeOpacity={0.85}
+                            disabled={carregando}
                         >
-                            <Text
-                                style={
-                                    styles.botaoOnlineTexto
-                                }
-                            >
-                                {online
-                                    ? 'Ficar offline'
-                                    : 'Ficar online'}
-                            </Text>
+                            {carregando ? (
+                                <ActivityIndicator color="#fff" />
+                            ) : (
+                                <Text style={styles.botaoOnlineTexto}>
+                                    {online
+                                        ? 'Ficar offline'
+                                        : 'Ficar online'}
+                                </Text>
+                            )}
                         </TouchableOpacity>
-
                     ) : (
-
                         <View style={styles.statusBloqueadoContainer}>
-
                             <Text style={styles.statusBloqueadoTexto}>
-                                {motorista?.status === 'PENDENTE'
+                                {motoristaPendente
                                     ? 'Aguardando aprovação'
-                                    : 'Indisponível'}
+                                    : motoristaBloqueado
+                                        ? 'Motorista bloqueado'
+                                        : 'Status não identificado'}
                             </Text>
-
                         </View>
                     )}
-
                 </View>
 
-                {/* ==================================================
-                    MINHA CORRIDA
-                ================================================== */}
+                {/* MINHA CORRIDA */}
 
                 {corridaAtual && (
-
-                    <View
-                        style={
-                            styles.areaCorridaAtual
-                        }
-                    >
-
-                        <Text
-                            style={
-                                styles.tituloSecao
-                            }
-                        >
+                    <View style={styles.areaCorridaAtual}>
+                        <Text style={styles.tituloSecao}>
                             Minha corrida
                         </Text>
 
-                        <View
-                            style={
-                                styles.cardCorridaAtual
-                            }
-                        >
-
-                            <View
-                                style={
-                                    styles.linhaStatus
-                                }
-                            >
-
-                                <Text
-                                    style={
-                                        styles.label
-                                    }
-                                >
-                                    Status
-                                </Text>
+                        <View style={styles.cardCorridaAtual}>
+                            <View style={styles.linhaStatus}>
+                                <Text style={styles.label}>Status</Text>
 
                                 <Text
                                     style={[
                                         styles.statusAtual,
-
-                                        corridaAtual.status ===
-                                            'ACEITA' &&
+                                        corridaAtual.status === 'ACEITA' &&
                                             styles.statusAceita,
-
-                                        corridaAtual.status ===
-                                            'EM_ANDAMENTO' &&
+                                        corridaAtual.status === 'EM_ANDAMENTO' &&
                                             styles.statusAndamento,
-
-                                        corridaAtual.status ===
-                                            'FINALIZADA' &&
+                                        corridaAtual.status === 'FINALIZADA' &&
                                             styles.statusFinalizada,
-
-                                        corridaAtual.status ===
-                                            'CANCELADA' &&
+                                        corridaAtual.status === 'CANCELADA' &&
                                             styles.statusCancelada,
                                     ]}
                                 >
-                                    {textoStatus(
-                                        corridaAtual.status
-                                    )}
+                                    {textoStatus(corridaAtual.status)}
                                 </Text>
-
                             </View>
 
-                            <View
-                                style={
-                                    styles.divisor
-                                }
-                            />
+                            <View style={styles.divisor} />
 
-                            <Text
-                                style={
-                                    styles.label
-                                }
-                            >
-                                Destino
-                            </Text>
-
-                            <Text
-                                style={
-                                    styles.destino
-                                }
-                            >
+                            <Text style={styles.label}>Destino</Text>
+                            <Text style={styles.destino}>
                                 {corridaAtual.destino}
                             </Text>
 
-                            <Text
-                                style={
-                                    styles.coordenadas
-                                }
-                            >
-                                Latitude:{' '}
-                                {
-                                    corridaAtual
-                                        .destino_latitude
-                                }
+                            <Text style={styles.coordenadas}>
+                                Latitude: {corridaAtual.destino_latitude}
+                            </Text>
+                            <Text style={styles.coordenadas}>
+                                Longitude: {corridaAtual.destino_longitude}
                             </Text>
 
-                            <Text
-                                style={
-                                    styles.coordenadas
-                                }
-                            >
-                                Longitude:{' '}
-                                {
-                                    corridaAtual
-                                        .destino_longitude
-                                }
-                            </Text>
-
-                            {/* ==================================================
-                                BOTÃO VER ROTA ATÉ O PASSAGEIRO
-                            ================================================== */}
-
-                            {corridaAtual.status ===
-                                'ACEITA' && (
-
-                                <TouchableOpacity
-                                    style={
-                                        styles.botaoVerRota
-                                    }
-                                    onPress={() =>
-                                        router.push(
-                                            '/rota-embarque'
-                                        )
-                                    }
-                                    activeOpacity={0.85}
-                                >
-
-                                    <Text
-                                        style={
-                                            styles.botaoVerRotaTexto
+                            {corridaAtual.status === 'ACEITA' && (
+                                <>
+                                    <TouchableOpacity
+                                        style={styles.botaoVerRota}
+                                        onPress={() =>
+                                            router.push('/rota-embarque')
                                         }
                                     >
-                                        📍 Ver rota até o passageiro
-                                    </Text>
-
-                                </TouchableOpacity>
-                            )}
-
-                            {/* ==================================================
-                                BOTÃO INICIAR
-                            ================================================== */}
-
-                            {corridaAtual.status ===
-                                'ACEITA' && (
-
-                                <TouchableOpacity
-                                    style={
-                                        styles.botaoIniciar
-                                    }
-                                    disabled={
-                                        processando ===
-                                        corridaAtual.id
-                                    }
-                                    onPress={() =>
-                                        iniciarCorrida(
-                                            corridaAtual.id
-                                        )
-                                    }
-                                >
-
-                                    {processando ===
-                                        corridaAtual.id ? (
-
-                                        <ActivityIndicator
-                                            color="#fff"
-                                        />
-
-                                    ) : (
-
-                                        <Text
-                                            style={
-                                                styles.botaoTexto
-                                            }
-                                        >
-                                            Iniciar corrida
+                                        <Text style={styles.botaoVerRotaTexto}>
+                                            📍 Ver rota até o passageiro
                                         </Text>
-                                    )}
+                                    </TouchableOpacity>
 
-                                </TouchableOpacity>
-                            )}
-
-                            {/* ==================================================
-                                ROTA ATÉ DESTINO
-                            ================================================== */}
-
-                            {corridaAtual.status ===
-                                'EM_ANDAMENTO' && (
-
-                                <TouchableOpacity
-                                    style={
-                                        styles.botaoVerRota
-                                    }
-                                    onPress={() =>
-                                        router.push(
-                                            '/rota-embarque'
-                                        )
-                                    }
-                                    activeOpacity={0.85}
-                                >
-
-                                    <Text
-                                        style={
-                                            styles.botaoTexto
+                                    <TouchableOpacity
+                                        style={styles.botaoIniciar}
+                                        disabled={processando === corridaAtual.id}
+                                        onPress={() =>
+                                            iniciarCorrida(corridaAtual.id)
                                         }
                                     >
-                                        🗺️ Ver rota até o destino
-                                    </Text>
-
-                                </TouchableOpacity>
+                                        {processando === corridaAtual.id ? (
+                                            <ActivityIndicator color="#fff" />
+                                        ) : (
+                                            <Text style={styles.botaoTexto}>
+                                                Iniciar corrida
+                                            </Text>
+                                        )}
+                                    </TouchableOpacity>
+                                </>
                             )}
 
-                            {/* ==================================================
-                                BOTÃO FINALIZAR
-                            ================================================== */}
-
-                            {corridaAtual.status ===
-                                'EM_ANDAMENTO' && (
-
-                                <TouchableOpacity
-                                    style={
-                                        styles.botaoFinalizar
-                                    }
-                                    disabled={
-                                        processando ===
-                                        corridaAtual.id
-                                    }
-                                    onPress={() =>
-                                        finalizarCorrida(
-                                            corridaAtual.id
-                                        )
-                                    }
-                                >
-
-                                    {processando ===
-                                        corridaAtual.id ? (
-
-                                        <ActivityIndicator
-                                            color="#fff"
-                                        />
-
-                                    ) : (
-
-                                        <Text
-                                            style={
-                                                styles.botaoTexto
-                                            }
-                                        >
-                                            Finalizar corrida
+                            {corridaAtual.status === 'EM_ANDAMENTO' && (
+                                <>
+                                    <TouchableOpacity
+                                        style={styles.botaoVerRota}
+                                        onPress={() =>
+                                            router.push('/rota-embarque')
+                                        }
+                                    >
+                                        <Text style={styles.botaoVerRotaTexto}>
+                                            🗺️ Ver rota até o destino
                                         </Text>
-                                    )}
+                                    </TouchableOpacity>
 
-                                </TouchableOpacity>
-                            )}
-
-                            {/* ==================================================
-                                FINALIZADA
-                            ================================================== */}
-
-                            {corridaAtual.status ===
-                                'FINALIZADA' && (
-
-                                <View
-                                    style={
-                                        styles.finalizada
-                                    }
-                                >
-
-                                    <Text
-                                        style={
-                                            styles.finalizadaTexto
+                                    <TouchableOpacity
+                                        style={styles.botaoFinalizar}
+                                        disabled={processando === corridaAtual.id}
+                                        onPress={() =>
+                                            finalizarCorrida(corridaAtual.id)
                                         }
                                     >
+                                        {processando === corridaAtual.id ? (
+                                            <ActivityIndicator color="#fff" />
+                                        ) : (
+                                            <Text style={styles.botaoTexto}>
+                                                Finalizar corrida
+                                            </Text>
+                                        )}
+                                    </TouchableOpacity>
+                                </>
+                            )}
+
+                            {corridaAtual.status === 'FINALIZADA' && (
+                                <View style={styles.finalizada}>
+                                    <Text style={styles.finalizadaTexto}>
                                         ✓ Corrida concluída
                                     </Text>
-
                                 </View>
                             )}
 
-                            {/* ==================================================
-                                CANCELADA
-                            ================================================== */}
-
-                            {corridaAtual.status ===
-                                'CANCELADA' && (
-
-                                <View
-                                    style={
-                                        styles.cancelada
-                                    }
-                                >
-
-                                    <Text
-                                        style={
-                                            styles.canceladaTexto
-                                        }
-                                    >
+                            {corridaAtual.status === 'CANCELADA' && (
+                                <View style={styles.cancelada}>
+                                    <Text style={styles.canceladaTexto}>
                                         Corrida cancelada pelo cliente
                                     </Text>
-
                                 </View>
                             )}
-
                         </View>
-
                     </View>
                 )}
 
-                {/* ==================================================
-                    CORRIDAS DISPONÍVEIS
-                ================================================== */}
+                {/* CORRIDAS DISPONÍVEIS */}
 
-                {online && !corridaAtual && (
-
+                {online && motoristaAprovado && !corridaAtual && (
                     <View>
-
-                        <View
-                            style={
-                                styles.cabecalhoSecao
-                            }
-                        >
-
-                            <Text
-                                style={
-                                    styles.tituloSecao
-                                }
-                            >
+                        <View style={styles.cabecalhoSecao}>
+                            <Text style={styles.tituloSecao}>
                                 Corridas disponíveis
                             </Text>
 
-                            <TouchableOpacity
-                                onPress={
-                                    carregarCorridas
-                                }
-                            >
-
-                                <Text
-                                    style={
-                                        styles.atualizarTexto
-                                    }
-                                >
+                            <TouchableOpacity onPress={carregarCorridas}>
+                                <Text style={styles.atualizarTexto}>
                                     Atualizar
                                 </Text>
-
                             </TouchableOpacity>
-
                         </View>
 
                         {carregando ? (
-
-                            <View
-                                style={
-                                    styles.carregando
-                                }
-                            >
-
-                                <ActivityIndicator
-                                    size="large"
-                                />
-
-                                <Text
-                                    style={
-                                        styles.carregandoTexto
-                                    }
-                                >
+                            <View style={styles.carregando}>
+                                <ActivityIndicator size="large" />
+                                <Text style={styles.carregandoTexto}>
                                     Buscando corridas...
                                 </Text>
-
                             </View>
-
                         ) : corridas.length === 0 ? (
-
-                            <View
-                                style={
-                                    styles.vazio
-                                }
-                            >
-
-                                <Text
-                                    style={
-                                        styles.vazioTitulo
-                                    }
-                                >
+                            <View style={styles.vazio}>
+                                <Text style={styles.vazioTitulo}>
                                     Nenhuma corrida disponível
                                 </Text>
-
-                                <Text
-                                    style={
-                                        styles.vazioTexto
-                                    }
-                                >
+                                <Text style={styles.vazioTexto}>
                                     Aguarde novas solicitações.
                                 </Text>
-
                             </View>
-
                         ) : (
+                            corridas.map(corrida => (
+                                <View
+                                    key={corrida.id}
+                                    style={styles.cardCorrida}
+                                >
+                                    <Text style={styles.corridaTitulo}>
+                                        Nova corrida
+                                    </Text>
 
-                            corridas.map(
-                                (corrida) => (
+                                    <View style={styles.divisor} />
 
-                                    <View
-                                        key={
-                                            corrida.id
-                                        }
-                                        style={
-                                            styles.cardCorrida
+                                    <Text style={styles.label}>Origem</Text>
+                                    <Text style={styles.coordenadas}>
+                                        Latitude: {corrida.origem_latitude}
+                                    </Text>
+                                    <Text style={styles.coordenadas}>
+                                        Longitude: {corrida.origem_longitude}
+                                    </Text>
+
+                                    <Text style={styles.labelDestino}>
+                                        Destino
+                                    </Text>
+                                    <Text style={styles.destino}>
+                                        {corrida.destino}
+                                    </Text>
+                                    <Text style={styles.coordenadas}>
+                                        Latitude: {corrida.destino_latitude}
+                                    </Text>
+                                    <Text style={styles.coordenadas}>
+                                        Longitude: {corrida.destino_longitude}
+                                    </Text>
+
+                                    {corrida.valor != null && (
+                                        <Text style={styles.valorCorrida}>
+                                            Valor: {Number(corrida.valor).toLocaleString(
+                                                'pt-BR',
+                                                {
+                                                    style: 'currency',
+                                                    currency: 'BRL',
+                                                }
+                                            )}
+                                        </Text>
+                                    )}
+
+                                    <TouchableOpacity
+                                        style={styles.botaoAceitar}
+                                        disabled={processando === corrida.id}
+                                        onPress={() =>
+                                            aceitarCorrida(corrida.id)
                                         }
                                     >
-
-                                        <Text
-                                            style={
-                                                styles.corridaTitulo
-                                            }
-                                        >
-                                            Nova corrida
-                                        </Text>
-
-                                        <View
-                                            style={
-                                                styles.divisor
-                                            }
-                                        />
-
-                                        <Text
-                                            style={
-                                                styles.label
-                                            }
-                                        >
-                                            Origem
-                                        </Text>
-
-                                        <Text
-                                            style={
-                                                styles.coordenadas
-                                            }
-                                        >
-                                            Latitude:{' '}
-                                            {
-                                                corrida
-                                                    .origem_latitude
-                                            }
-                                        </Text>
-
-                                        <Text
-                                            style={
-                                                styles.coordenadas
-                                            }
-                                        >
-                                            Longitude:{' '}
-                                            {
-                                                corrida
-                                                    .origem_longitude
-                                            }
-                                        </Text>
-
-                                        <Text
-                                            style={
-                                                styles.labelDestino
-                                            }
-                                        >
-                                            Destino
-                                        </Text>
-
-                                        <Text
-                                            style={
-                                                styles.destino
-                                            }
-                                        >
-                                            {
-                                                corrida.destino
-                                            }
-                                        </Text>
-
-                                        <Text
-                                            style={
-                                                styles.coordenadas
-                                            }
-                                        >
-                                            Latitude:{' '}
-                                            {
-                                                corrida
-                                                    .destino_latitude
-                                            }
-                                        </Text>
-
-                                        <Text
-                                            style={
-                                                styles.coordenadas
-                                            }
-                                        >
-                                            Longitude:{' '}
-                                            {
-                                                corrida
-                                                    .destino_longitude
-                                            }
-                                        </Text>
-
-                                        <TouchableOpacity
-                                            style={
-                                                styles.botaoAceitar
-                                            }
-                                            disabled={
-                                                processando ===
-                                                corrida.id
-                                            }
-                                            onPress={() =>
-                                                aceitarCorrida(
-                                                    corrida.id
-                                                )
-                                            }
-                                        >
-
-                                            {processando ===
-                                                corrida.id ? (
-
-                                                <ActivityIndicator
-                                                    color="#fff"
-                                                />
-
-                                            ) : (
-
-                                                <Text
-                                                    style={
-                                                        styles.botaoTexto
-                                                    }
-                                                >
-                                                    Aceitar corrida
-                                                </Text>
-                                            )}
-
-                                        </TouchableOpacity>
-
-                                    </View>
-                                )
-                            )
+                                        {processando === corrida.id ? (
+                                            <ActivityIndicator color="#fff" />
+                                        ) : (
+                                            <Text style={styles.botaoTexto}>
+                                                Aceitar corrida
+                                            </Text>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
+                            ))
                         )}
-
                     </View>
                 )}
 
-                {/* ==================================================
-                    OFFLINE
-                ================================================== */}
+                {/* MOTORISTA OFFLINE */}
 
-                {!online &&
-                    !corridaAtual &&
-                    motorista?.status === 'PENDENTE' && (
-
-                    <View
-                        style={[
-                            styles.vazio,
-                            styles.cardPendente,
-                        ]}
-                    >
-
-                        <Text
-                            style={
-                                styles.iconePendente
-                            }
-                        >
-                            ⏳
-                        </Text>
-
-                        <Text
-                            style={
-                                styles.vazioTitulo
-                            }
-                        >
+                {!online && !corridaAtual && motoristaPendente && (
+                    <View style={[styles.vazio, styles.cardPendente]}>
+                        <Text style={styles.iconePendente}>⏳</Text>
+                        <Text style={styles.vazioTitulo}>
                             Cadastro em análise
                         </Text>
-
-                        <Text
-                            style={
-                                styles.vazioTexto
-                            }
-                        >
-                            Seu cadastro de motorista foi recebido
-                            e está aguardando aprovação.
+                        <Text style={styles.vazioTexto}>
+                            Seu cadastro de motorista foi recebido e está
+                            aguardando aprovação.
                         </Text>
-
-                        <Text
-                            style={
-                                styles.vazioTexto
-                            }
-                        >
-                            Assim que seu cadastro for aprovado,
-                            você poderá ficar online e receber corridas.
+                        <Text style={styles.vazioTexto}>
+                            Assim que for aprovado, você poderá ficar online
+                            e receber corridas.
                         </Text>
-
                     </View>
                 )}
 
-                {!online &&
-                    !corridaAtual &&
-                    motorista?.status === 'BLOQUEADO' && (
-
-                    <View
-                        style={[
-                            styles.vazio,
-                            styles.cardBloqueado,
-                        ]}
-                    >
-
-                        <Text
-                            style={
-                                styles.iconePendente
-                            }
-                        >
-                            ⚠️
-                        </Text>
-
-                        <Text
-                            style={
-                                styles.vazioTitulo
-                            }
-                        >
+                {!online && !corridaAtual && motoristaBloqueado && (
+                    <View style={[styles.vazio, styles.cardBloqueado]}>
+                        <Text style={styles.iconePendente}>⚠️</Text>
+                        <Text style={styles.vazioTitulo}>
                             Cadastro bloqueado
                         </Text>
-
-                        <Text
-                            style={
-                                styles.vazioTexto
-                            }
-                        >
-                            Seu cadastro de motorista está bloqueado
-                            e você não pode receber corridas no momento.
+                        <Text style={styles.vazioTexto}>
+                            Seu cadastro está bloqueado e você não pode
+                            receber corridas no momento.
                         </Text>
-
-                        <Text
-                            style={
-                                styles.vazioTexto
-                            }
-                        >
-                            Entre em contato com o suporte para mais informações.
+                        <Text style={styles.vazioTexto}>
+                            Entre em contato com o suporte para mais
+                            informações.
                         </Text>
-
                     </View>
                 )}
 
                 {!online &&
                     !corridaAtual &&
-                    motorista?.status === 'ATIVO' && (
-
-                    <View
-                        style={
-                            styles.vazio
-                        }
-                    >
-
-                        <Text
-                            style={
-                                styles.vazioTitulo
-                            }
-                        >
-                            Você está offline
-                        </Text>
-
-                        <Text
-                            style={
-                                styles.vazioTexto
-                            }
-                        >
-                            Fique online para receber
-                            corridas.
-                        </Text>
-
-                    </View>
-                )}
-
+                    motoristaAprovado && (
+                        <View style={styles.vazio}>
+                            <Text style={styles.vazioTitulo}>
+                                Você está offline
+                            </Text>
+                            <Text style={styles.vazioTexto}>
+                                Fique online para receber corridas.
+                            </Text>
+                        </View>
+                    )}
             </ScrollView>
-
         </View>
     );
 }
@@ -1965,12 +1310,10 @@ export default function Motorista() {
 // ==========================================================
 
 const styles = StyleSheet.create({
-
     container: {
         flex: 1,
         backgroundColor: '#f5f5f5',
     },
-
     cabecalho: {
         paddingTop: 55,
         paddingBottom: 18,
@@ -1980,100 +1323,76 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
     },
-
     titulo: {
         color: '#ffffff',
         fontSize: 24,
         fontWeight: '700',
     },
-
     usuario: {
         color: '#d1d5db',
         fontSize: 14,
         marginTop: 4,
     },
-
     botaoSair: {
         paddingHorizontal: 14,
         paddingVertical: 8,
         borderRadius: 8,
         backgroundColor: '#374151',
     },
-
     botaoSairTexto: {
         color: '#ffffff',
         fontWeight: '600',
     },
-
     conteudo: {
         padding: 16,
         paddingBottom: 40,
     },
-
-    // ======================================================
-    // CARD MOTORISTA
-    // ======================================================
-
     cardMotorista: {
         backgroundColor: '#ffffff',
         borderRadius: 14,
         padding: 18,
         marginBottom: 20,
-
         shadowColor: '#000',
-        shadowOffset: {
-            width: 0,
-            height: 2,
-        },
+        shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.08,
         shadowRadius: 4,
-
         elevation: 2,
     },
-
     cabecalhoCard: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
     },
-
     tituloCard: {
         fontSize: 18,
         fontWeight: '700',
         color: '#111827',
     },
-
     subtituloCard: {
         fontSize: 13,
         color: '#6b7280',
         marginTop: 3,
     },
-
     badgeAprovacao: {
         paddingHorizontal: 10,
         paddingVertical: 6,
         borderRadius: 20,
         backgroundColor: '#e5e7eb',
     },
-
     badgeAtivo: {
         backgroundColor: '#dcfce7',
     },
-
     badgePendente: {
         backgroundColor: '#fef3c7',
     },
-
     badgeBloqueado: {
         backgroundColor: '#fee2e2',
     },
-
     badgeAprovacaoTexto: {
         fontSize: 12,
         fontWeight: '700',
         color: '#374151',
     },
-
     labelVeiculo: {
         fontSize: 11,
         color: '#9ca3af',
@@ -2081,12 +1400,10 @@ const styles = StyleSheet.create({
         letterSpacing: 0.8,
         marginBottom: 10,
     },
-
     veiculoPrincipal: {
         flexDirection: 'row',
         alignItems: 'center',
     },
-
     veiculoIcone: {
         width: 48,
         height: 48,
@@ -2096,27 +1413,22 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         marginRight: 12,
     },
-
     veiculoIconeTexto: {
         fontSize: 25,
     },
-
     veiculoInformacoes: {
         flex: 1,
     },
-
     veiculoNome: {
         fontSize: 17,
         fontWeight: '700',
         color: '#111827',
     },
-
     veiculoCategoria: {
         fontSize: 13,
         color: '#6b7280',
         marginTop: 4,
     },
-
     detalhesVeiculo: {
         flexDirection: 'row',
         marginTop: 18,
@@ -2124,28 +1436,20 @@ const styles = StyleSheet.create({
         borderTopWidth: 1,
         borderTopColor: '#f3f4f6',
     },
-
     detalheVeiculo: {
         flex: 1,
     },
-
     detalheLabel: {
         fontSize: 10,
         fontWeight: '800',
         color: '#9ca3af',
         marginBottom: 4,
     },
-
     detalheValor: {
         fontSize: 14,
         fontWeight: '600',
         color: '#111827',
     },
-
-    // ======================================================
-    // ONLINE
-    // ======================================================
-
     cardOnline: {
         backgroundColor: '#ffffff',
         borderRadius: 14,
@@ -2154,106 +1458,79 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-
         shadowColor: '#000',
-        shadowOffset: {
-            width: 0,
-            height: 2,
-        },
+        shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.08,
         shadowRadius: 4,
-
         elevation: 2,
     },
-
     label: {
         fontSize: 13,
         color: '#6b7280',
         marginBottom: 4,
         fontWeight: '600',
     },
-
     statusOnline: {
         fontSize: 16,
         fontWeight: '700',
     },
-
     online: {
         color: '#16a34a',
     },
-
     offline: {
         color: '#6b7280',
     },
-
     botaoOnline: {
         paddingHorizontal: 16,
         paddingVertical: 11,
         borderRadius: 10,
+        minWidth: 125,
+        alignItems: 'center',
     },
-
     botaoFicarOnline: {
         backgroundColor: '#16a34a',
     },
-
     botaoOffline: {
         backgroundColor: '#6b7280',
     },
-
     botaoOnlineTexto: {
         color: '#ffffff',
         fontWeight: '700',
     },
-
-    // ======================================================
-    // CORRIDAS
-    // ======================================================
-
     tituloSecao: {
         fontSize: 20,
         fontWeight: '700',
         color: '#111827',
         marginBottom: 12,
     },
-
     cabecalhoSecao: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
     },
-
     atualizarTexto: {
         color: '#2563eb',
         fontWeight: '600',
         marginBottom: 12,
     },
-
     areaCorridaAtual: {
         marginBottom: 24,
     },
-
     cardCorridaAtual: {
         backgroundColor: '#ffffff',
         borderRadius: 14,
         padding: 18,
-
         shadowColor: '#000',
-        shadowOffset: {
-            width: 0,
-            height: 2,
-        },
+        shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.08,
         shadowRadius: 4,
-
         elevation: 2,
     },
-
     linhaStatus: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
     },
-
     statusAtual: {
         fontSize: 15,
         fontWeight: '700',
@@ -2263,46 +1540,44 @@ const styles = StyleSheet.create({
         backgroundColor: '#e5e7eb',
         color: '#374151',
     },
-
     statusAceita: {
         backgroundColor: '#fef3c7',
         color: '#92400e',
     },
-
     statusAndamento: {
         backgroundColor: '#dbeafe',
         color: '#1d4ed8',
     },
-
     statusFinalizada: {
         backgroundColor: '#dcfce7',
         color: '#166534',
     },
-
     statusCancelada: {
         backgroundColor: '#fee2e2',
         color: '#991b1b',
     },
-
     divisor: {
         height: 1,
         backgroundColor: '#e5e7eb',
         marginVertical: 14,
     },
-
     destino: {
         fontSize: 16,
         color: '#111827',
         fontWeight: '600',
         marginBottom: 8,
     },
-
     coordenadas: {
         fontSize: 13,
         color: '#6b7280',
         marginBottom: 3,
     },
-
+    valorCorrida: {
+        marginTop: 12,
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#15803d',
+    },
     botaoIniciar: {
         backgroundColor: '#2563eb',
         borderRadius: 10,
@@ -2310,7 +1585,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginTop: 18,
     },
-
     botaoFinalizar: {
         backgroundColor: '#16a34a',
         borderRadius: 10,
@@ -2318,7 +1592,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginTop: 18,
     },
-
     botaoAceitar: {
         backgroundColor: '#2563eb',
         borderRadius: 10,
@@ -2326,30 +1599,26 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginTop: 18,
     },
-
     botaoTexto: {
         color: '#ffffff',
         fontSize: 15,
         fontWeight: '700',
     },
-
     botaoVerRota: {
         marginTop: 14,
         marginBottom: 10,
         paddingVertical: 14,
         paddingHorizontal: 16,
         borderRadius: 12,
-        backgroundColor: '#2563EB',
+        backgroundColor: '#2563eb',
         alignItems: 'center',
         justifyContent: 'center',
     },
-
     botaoVerRotaTexto: {
-        color: '#FFFFFF',
+        color: '#ffffff',
         fontSize: 15,
         fontWeight: '700',
     },
-
     finalizada: {
         marginTop: 18,
         padding: 14,
@@ -2357,13 +1626,11 @@ const styles = StyleSheet.create({
         backgroundColor: '#dcfce7',
         alignItems: 'center',
     },
-
     finalizadaTexto: {
         color: '#166534',
         fontSize: 15,
         fontWeight: '700',
     },
-
     cancelada: {
         marginTop: 18,
         padding: 14,
@@ -2371,36 +1638,27 @@ const styles = StyleSheet.create({
         backgroundColor: '#fee2e2',
         alignItems: 'center',
     },
-
     canceladaTexto: {
         color: '#991b1b',
         fontSize: 15,
         fontWeight: '700',
     },
-
     cardCorrida: {
         backgroundColor: '#ffffff',
         borderRadius: 14,
         padding: 18,
         marginBottom: 14,
-
         shadowColor: '#000',
-        shadowOffset: {
-            width: 0,
-            height: 2,
-        },
+        shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.08,
         shadowRadius: 4,
-
         elevation: 2,
     },
-
     corridaTitulo: {
         fontSize: 18,
         fontWeight: '700',
         color: '#111827',
     },
-
     labelDestino: {
         fontSize: 13,
         color: '#6b7280',
@@ -2408,17 +1666,14 @@ const styles = StyleSheet.create({
         marginBottom: 4,
         fontWeight: '600',
     },
-
     carregando: {
         alignItems: 'center',
         paddingVertical: 40,
     },
-
     carregandoTexto: {
         marginTop: 10,
         color: '#6b7280',
     },
-
     vazio: {
         backgroundColor: '#ffffff',
         borderRadius: 14,
@@ -2426,51 +1681,43 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginTop: 10,
     },
-
     vazioTitulo: {
         fontSize: 17,
         fontWeight: '700',
         color: '#374151',
         textAlign: 'center',
     },
-
     vazioTexto: {
         fontSize: 14,
         color: '#6b7280',
         marginTop: 8,
         textAlign: 'center',
     },
-
     statusBloqueadoContainer: {
         backgroundColor: '#fef3c7',
         paddingHorizontal: 14,
         paddingVertical: 10,
         borderRadius: 10,
-        maxWidth: 170,
+        maxWidth: 175,
     },
-
     statusBloqueadoTexto: {
         color: '#92400e',
         fontSize: 12,
         fontWeight: '700',
         textAlign: 'center',
     },
-
     cardPendente: {
-    backgroundColor: '#fffbeb',
-    borderWidth: 1,
-    borderColor: '#fde68a',
-},
-
-cardBloqueado: {
-    backgroundColor: '#fef2f2',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-},
-
-iconePendente: {
-    fontSize: 36,
-    marginBottom: 10,
-},
-    
+        backgroundColor: '#fffbeb',
+        borderWidth: 1,
+        borderColor: '#fde68a',
+    },
+    cardBloqueado: {
+        backgroundColor: '#fef2f2',
+        borderWidth: 1,
+        borderColor: '#fecaca',
+    },
+    iconePendente: {
+        fontSize: 36,
+        marginBottom: 10,
+    },
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
   ActivityIndicator,
@@ -106,24 +106,60 @@ export default function Cadastro() {
     try {
       setCarregandoDadosVeiculo(true);
 
-      const [marcasResponse, categoriasResponse] =
-        await Promise.all([
+      console.log('Iniciando carregamento dos dados do veículo...');
+
+      const [marcasResult, categoriasResult] =
+        await Promise.allSettled([
           api.get('/marcas'),
           api.get('/categorias'),
         ]);
 
-      setMarcas(marcasResponse.data);
-      setCategorias(categoriasResponse.data);
+      if (marcasResult.status === 'fulfilled') {
+        console.log(
+          'GET /marcas:',
+          marcasResult.value.status,
+          marcasResult.value.data
+        );
 
-    } catch (error) {
+        setMarcas(marcasResult.value.data);
+      } else {
+        console.error(
+          'ERRO GET /marcas:',
+          marcasResult.reason?.response?.status,
+          marcasResult.reason?.response?.data ||
+            marcasResult.reason?.message
+        );
+
+        setMarcas([]);
+      }
+
+      if (categoriasResult.status === 'fulfilled') {
+        console.log(
+          'GET /categorias:',
+          categoriasResult.value.status,
+          categoriasResult.value.data
+        );
+
+        setCategorias(categoriasResult.value.data);
+      } else {
+        console.error(
+          'ERRO GET /categorias:',
+          categoriasResult.reason?.response?.status,
+          categoriasResult.reason?.response?.data ||
+            categoriasResult.reason?.message
+        );
+
+        setCategorias([]);
+      }
+    } catch (error: any) {
       console.error(
-        'Erro ao carregar dados do veículo:',
-        error
+        'Erro inesperado ao carregar dados do veículo:',
+        error?.response?.data || error?.message || error
       );
 
       Alert.alert(
         'Erro',
-        'Não foi possível carregar as marcas e categorias dos veículos.'
+        'Ocorreu um erro inesperado ao carregar os dados do veículo.'
       );
     } finally {
       setCarregandoDadosVeiculo(false);

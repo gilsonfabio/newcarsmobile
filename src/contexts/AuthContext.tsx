@@ -106,12 +106,12 @@ export function AuthProvider({
 
       const dados = response.data;
 
-      console.log('=================================');
-      console.log('LOGIN REALIZADO');
-      console.log('Usuário:', dados.name);
-      console.log('Tipo:', dados.tipo);
-      console.log('Motorista:', dados.motorista);
-      console.log('=================================');
+      //console.log('=================================');
+      //console.log('LOGIN REALIZADO');
+      //console.log('Usuário:', dados.name);
+      //console.log('Tipo:', dados.tipo);
+      //console.log('Motorista:', dados.motorista);
+      //console.log('=================================');
 
       // ------------------------------------------------------
       // SALVA TOKEN

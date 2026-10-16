@@ -1,7 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 
 // Deve ser o mesmo endereço utilizado pelo Axios.
-const SOCKET_URL = 'http://10.111.135.208:3333';
+const SOCKET_URL = 'https://api.backmotors.com.br';
 
 let socket: Socket | null = null;
 
@@ -15,7 +15,6 @@ export function conectarSocket(token: string): Socket {
         }
 
         return socket;
-
     }
 
     socket = io(SOCKET_URL, {
