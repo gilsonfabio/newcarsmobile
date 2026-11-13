@@ -1,3 +1,4 @@
+
 import {
   useCallback,
   useEffect,
@@ -23,7 +24,12 @@ import * as Location from 'expo-location';
 
 import { api } from '../services/api';
 
+type ModalidadePagamento = 'PRESENCIAL' | 'ONLINE';
+
+type FormaPagamento = 'DINHEIRO' | 'PIX' | 'CARTAO';
+
 type OpcaoVeiculo = {
+  cotacao_id: string;
   categoria_veiculo_id: string;
   nome: string;
   descricao?: string | null;
@@ -40,21 +46,6 @@ type Estimativa = {
 };
 
 export default function ConfirmarCorrida() {
-  /*
-   * IMPORTANTE:
-   *
-   * A tela solicitar-corrida envia:
-   *
-   * latitude
-   * longitude
-   * origem (opcional: endereço já resolvido)
-   * destino
-   * destino_latitude
-   * destino_longitude
-   *
-   * Se o endereço da origem não vier nos parâmetros,
-   * tentamos obtê-lo a partir das coordenadas do GPS.
-   */
   const params = useLocalSearchParams<{
     latitude?: string;
     longitude?: string;
@@ -64,50 +55,40 @@ export default function ConfirmarCorrida() {
     destino_longitude?: string;
   }>();
 
-  /*
-   * Logs para facilitar o diagnóstico caso algum
-   * parâmetro não chegue corretamente.
-   */
-  console.log('=================================');
-  console.log('PARAMETROS CONFIRMAR CORRIDA');
-  console.log('latitude:', params.latitude);
-  console.log('longitude:', params.longitude);
-  console.log(
-    'destino_latitude:',
-    params.destino_latitude
-  );
-  console.log(
-    'destino_longitude:',
-    params.destino_longitude
-  );
-  console.log('origem recebida:', params.origem);
-  console.log('destino:', params.destino);
-  console.log('=================================');
+  const origemLatitude = Number(params.latitude);
+  const origemLongitude = Number(params.longitude);
 
-  const origemLatitude = Number(
-    params.latitude
-  );
-
-  const origemLongitude = Number(
-    params.longitude
-  );
-
-  const destinoLatitude = Number(
-    params.destino_latitude
-  );
-
-  const destinoLongitude = Number(
-    params.destino_longitude
-  );
+  const destinoLatitude = Number(params.destino_latitude);
+  const destinoLongitude = Number(params.destino_longitude);
 
   const destino = params.destino ?? '';
 
   const [origemEndereco, setOrigemEndereco] =
     useState((params.origem ?? '').trim());
 
+  const [estimativa, setEstimativa] =
+    useState<Estimativa | null>(null);
+
+  const [
+    categoriaSelecionada,
+    setCategoriaSelecionada,
+  ] = useState<string | null>(null);
+
+  const [carregandoEstimativa, setCarregandoEstimativa] =
+    useState(true);
+
+  const [confirmando, setConfirmando] =
+    useState(false);
+
+  // Forma inicial de pagamento
+  const [modalidade, setModalidade] =
+    useState<ModalidadePagamento>('PRESENCIAL');
+
+  const [formaPagamento, setFormaPagamento] =
+    useState<FormaPagamento>('DINHEIRO');
+
   /*
-   * Obtém o endereço da origem usando o GPS.
-   * Se a tela anterior já enviou o endereço, preserva-o.
+   * Obtém endereço da origem quando necessário.
    */
   useEffect(() => {
     let ativo = true;
@@ -165,12 +146,11 @@ export default function ConfirmarCorrida() {
         }
       } catch (error) {
         console.warn(
-          'Não foi possível converter as coordenadas da origem em endereço:',
+          'Erro ao obter endereço da origem:',
           error
         );
 
         if (ativo) {
-          // Fallback para nunca enviar origem como undefined.
           setOrigemEndereco(
             `Localização atual (${origemLatitude.toFixed(6)}, ${origemLongitude.toFixed(6)})`
           );
@@ -183,37 +163,21 @@ export default function ConfirmarCorrida() {
     return () => {
       ativo = false;
     };
-  }, [params.origem, origemLatitude, origemLongitude]);
-
-  const [estimativa, setEstimativa] =
-    useState<Estimativa | null>(null);
-
-  const [
-    categoriaSelecionada,
-    setCategoriaSelecionada,
-  ] = useState<string | null>(null);
-
-  const [
-    carregandoEstimativa,
-    setCarregandoEstimativa,
-  ] = useState(true);
-
-  const [confirmando, setConfirmando] =
-    useState(false);
+  }, [
+    params.origem,
+    origemLatitude,
+    origemLongitude,
+  ]);
 
   /*
    * Formata distância.
    */
-  const formatarDistancia = (
-    metros: number
-  ) => {
+  const formatarDistancia = (metros: number) => {
     if (!Number.isFinite(metros)) {
       return '0 km';
     }
 
-    const km = metros / 1000;
-
-    return `${km
+    return `${(metros / 1000)
       .toFixed(1)
       .replace('.', ',')} km`;
   };
@@ -221,478 +185,307 @@ export default function ConfirmarCorrida() {
   /*
    * Formata duração.
    */
-  const formatarDuracao = (
-    segundos: number
-  ) => {
+  const formatarDuracao = (segundos: number) => {
     if (!Number.isFinite(segundos)) {
       return '0 min';
     }
 
-    const minutos = Math.ceil(
-      segundos / 60
-    );
+    const minutos = Math.ceil(segundos / 60);
 
     if (minutos < 60) {
       return `${minutos} min`;
     }
 
-    const horas = Math.floor(
-      minutos / 60
-    );
+    const horas = Math.floor(minutos / 60);
+    const minutosRestantes = minutos % 60;
 
-    const minutosRestantes =
-      minutos % 60;
-
-    if (minutosRestantes === 0) {
-      return `${horas}h`;
-    }
-
-    return `${horas}h ${minutosRestantes}min`;
+    return minutosRestantes === 0
+      ? `${horas}h`
+      : `${horas}h ${minutosRestantes}min`;
   };
 
   /*
    * Formata valor monetário.
    */
-  const formatarValor = (
-    valor: number | string
-  ) => {
+  const formatarValor = (valor: number | string) => {
     const numero = Number(valor);
 
     if (!Number.isFinite(numero)) {
       return 'R$ 0,00';
     }
 
-    return numero.toLocaleString(
-      'pt-BR',
-      {
-        style: 'currency',
-        currency: 'BRL',
-      }
-    );
+    return numero.toLocaleString('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    });
   };
 
   /*
-   * Busca a estimativa.
+   * Busca estimativa no backend.
    */
-  const carregarEstimativa =
-    useCallback(async () => {
-      console.log(
-        '================================='
+  const carregarEstimativa = useCallback(async () => {
+    if (
+      !Number.isFinite(origemLatitude) ||
+      !Number.isFinite(origemLongitude) ||
+      !Number.isFinite(destinoLatitude) ||
+      !Number.isFinite(destinoLongitude) ||
+      origemLatitude < -90 ||
+      origemLatitude > 90 ||
+      origemLongitude < -180 ||
+      origemLongitude > 180 ||
+      destinoLatitude < -90 ||
+      destinoLatitude > 90 ||
+      destinoLongitude < -180 ||
+      destinoLongitude > 180 ||
+      !destino.trim()
+    ) {
+      Alert.alert(
+        'Dados inválidos',
+        'Não foi possível identificar corretamente a origem e o destino.'
       );
 
-      console.log(
-        'VALIDANDO DADOS DA CORRIDA'
+      setCarregandoEstimativa(false);
+      return;
+    }
+
+    try {
+      setCarregandoEstimativa(true);
+
+      const response = await api.post(
+        '/corridas/estimativa',
+        {
+          origem: (params.origem ?? '').trim() || undefined,
+          origem_latitude: origemLatitude,
+          origem_longitude: origemLongitude,
+          destino_latitude: destinoLatitude,
+          destino_longitude: destinoLongitude,
+          destino,
+        }
       );
 
-      console.log(
-        'origemLatitude:',
-        origemLatitude
-      );
+      const dados: Estimativa | undefined =
+        response.data;
 
-      console.log(
-        'origemLongitude:',
-        origemLongitude
-      );
-
-      console.log(
-        'destinoLatitude:',
-        destinoLatitude
-      );
-
-      console.log(
-        'destinoLongitude:',
-        destinoLongitude
-      );
-
-      console.log(
-        'origemEndereco:',
-        origemEndereco
-      );
-
-      console.log(
-        'destino:',
-        destino
-      );
-
-      console.log(
-        '================================='
-      );
-
-      /*
-       * Validação.
-       */
       if (
-        !Number.isFinite(
-          origemLatitude
-        ) ||
-        !Number.isFinite(
-          origemLongitude
-        ) ||
-        !Number.isFinite(
-          destinoLatitude
-        ) ||
-        !Number.isFinite(
-          destinoLongitude
-        ) ||
-        !destino.trim()
+        !dados ||
+        !Array.isArray(dados.opcoes)
       ) {
-        console.error(
-          'DADOS INVALIDOS PARA ESTIMATIVA'
+        throw new Error(
+          'Resposta inválida recebida do servidor.'
         );
-
-        Alert.alert(
-          'Dados inválidos',
-          'Não foi possível identificar corretamente a origem e o destino.'
-        );
-
-        setCarregandoEstimativa(false);
-
-        return;
       }
 
-      try {
-        setCarregandoEstimativa(true);
+      const opcoesValidas = dados.opcoes.every(
+        opcao =>
+          typeof opcao.cotacao_id === 'string' &&
+          opcao.cotacao_id.length > 0
+      );
 
-        console.log(
-          '================================='
+      if (!opcoesValidas) {
+        throw new Error(
+          'O servidor não retornou o identificador da cotação para todas as categorias.'
         );
+      }
 
-        console.log(
-          'SOLICITANDO ESTIMATIVA'
-        );
+      setEstimativa(dados);
 
-        console.log(
-          'Origem:',
-          origemLatitude,
-          origemLongitude
-        );
-
-        console.log(
-          'Destino:',
-          destinoLatitude,
-          destinoLongitude
-        );
-
-        console.log(
-          'Endereço destino:',
-          destino
-        );
-
-        console.log(
-          '================================='
-        );
-
-        const response =
-          await api.post(
-            '/corridas/estimativa',
-            {
-              origem_latitude:
-                origemLatitude,
-
-              origem_longitude:
-                origemLongitude,
-
-              destino_latitude:
-                destinoLatitude,
-
-              destino_longitude:
-                destinoLongitude,
-
-              destino,
-            }
-          );
-
-        console.log(
-          '================================='
-        );
-
-        console.log(
-          'RESPOSTA ESTIMATIVA'
-        );
-
-        console.log(
-          response.data
-        );
-
-        console.log(
-          '================================='
-        );
-
-        /*
-         * O backend retorna diretamente:
-         *
-         * {
-         *   distancia_metros,
-         *   duracao_estimada_segundos,
-         *   opcoes
-         * }
-         */
-        const dados:
-          | Estimativa
-          | undefined =
-          response.data;
-
-        if (
-          !dados ||
-          !Array.isArray(
-            dados.opcoes
-          )
-        ) {
-          throw new Error(
-            'Resposta inválida recebida do servidor.'
-          );
-        }
-
-        setEstimativa(dados);
-
-        /*
-         * Seleciona automaticamente
-         * a primeira categoria.
-         */
-        if (
-          dados.opcoes.length > 0
-        ) {
-          setCategoriaSelecionada(
-            dados.opcoes[0]
-              .categoria_veiculo_id
-          );
-        } else {
-          setCategoriaSelecionada(
-            null
-          );
-        }
-      } catch (error: any) {
-        console.error(
-          'Erro ao carregar estimativa:',
-          error?.response?.data ||
-            error
-        );
-
-        const mensagem =
-          error?.response?.data
-            ?.message ||
-          error?.response?.data
-            ?.error ||
-          'Não foi possível calcular a estimativa da corrida.';
-
-        Alert.alert(
-          'Erro',
-          mensagem
-        );
-
-        setEstimativa(null);
-
+      if (dados.opcoes.length > 0) {
         setCategoriaSelecionada(
-          null
+          dados.opcoes[0].categoria_veiculo_id
         );
-      } finally {
-        setCarregandoEstimativa(
-          false
-        );
+      } else {
+        setCategoriaSelecionada(null);
       }
-    }, [
-      origemLatitude,
-      origemLongitude,
-      destinoLatitude,
-      destinoLongitude,
-      destino,
-      origemEndereco,
-    ]);
+
+    } catch (error: any) {
+      console.error(
+        'Erro ao carregar estimativa:',
+        error?.response?.data || error
+      );
+
+      const mensagem =
+        error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        error?.message ||
+        'Não foi possível calcular a estimativa da corrida.';
+
+      Alert.alert('Erro', mensagem);
+
+      setEstimativa(null);
+      setCategoriaSelecionada(null);
+
+    } finally {
+      setCarregandoEstimativa(false);
+    }
+  }, [
+    origemLatitude,
+    origemLongitude,
+    destinoLatitude,
+    destinoLongitude,
+    destino,
+    params.origem,
+  ]);
 
   useEffect(() => {
     carregarEstimativa();
   }, [carregarEstimativa]);
 
   /*
-   * Confirma a corrida.
+   * Altera modalidade de pagamento.
    *
-   * O backend recalcula:
-   * - distância;
-   * - duração;
-   * - preço.
+   * Dinheiro só pode ser presencial.
    */
-  const confirmarCorrida =
-    async () => {
-      if (!estimativa) {
-        Alert.alert(
-          'Atenção',
-          'A estimativa da corrida ainda não foi carregada.'
-        );
+  const selecionarModalidade = (
+    novaModalidade: ModalidadePagamento
+  ) => {
+    setModalidade(novaModalidade);
 
-        return;
-      }
+    if (
+      novaModalidade === 'ONLINE' &&
+      formaPagamento === 'DINHEIRO'
+    ) {
+      setFormaPagamento('PIX');
+    }
+  };
 
-      if (!categoriaSelecionada) {
-        Alert.alert(
-          'Atenção',
-          'Selecione uma categoria de veículo.'
-        );
+  /*
+   * Confirma corrida e registra pagamento.
+   */
+  const confirmarCorrida = async () => {
+    if (!estimativa) {
+      Alert.alert(
+        'Atenção',
+        'A estimativa da corrida ainda não foi carregada.'
+      );
+      return;
+    }
 
-        return;
-      }
+    if (!categoriaSelecionada) {
+      Alert.alert(
+        'Atenção',
+        'Selecione uma categoria de veículo.'
+      );
+      return;
+    }
 
-      const opcao =
-        estimativa.opcoes.find(
-          item =>
-            item.categoria_veiculo_id ===
-            categoriaSelecionada
-        );
+    const opcao = estimativa.opcoes.find(
+      item =>
+        item.categoria_veiculo_id === categoriaSelecionada
+    );
 
-      if (!opcao) {
-        Alert.alert(
-          'Atenção',
-          'A categoria selecionada não está mais disponível.'
-        );
+    if (!opcao) {
+      Alert.alert(
+        'Atenção',
+        'A categoria selecionada não está mais disponível.'
+      );
+      return;
+    }
 
-        return;
-      }
+    if (!opcao.cotacao_id) {
+      Alert.alert(
+        'Erro',
+        'A cotação desta categoria não foi identificada. Atualize a estimativa.'
+      );
+      return;
+    }
 
-      try {
-        setConfirmando(true);
+    if (
+      modalidade === 'ONLINE' &&
+      formaPagamento === 'DINHEIRO'
+    ) {
+      Alert.alert(
+        'Forma de pagamento inválida',
+        'Dinheiro só está disponível para pagamento presencial.'
+      );
+      return;
+    }
 
-        console.log(
-          '================================='
-        );
+    try {
+      setConfirmando(true);
 
-        console.log(
-          'CONFIRMANDO CORRIDA'
-        );
+      console.log('=================================');
+      console.log('CONFIRMANDO CORRIDA');
+      console.log('Categoria:', opcao.nome);
+      console.log('Cotação:', opcao.cotacao_id);
+      console.log('Valor:', opcao.valor_estimado);
+      console.log('Modalidade:', modalidade);
+      console.log('Forma de pagamento:', formaPagamento);
+      console.log('=================================');
 
-        console.log(
-          'Categoria:',
-          opcao.nome
-        );
+      /*
+       * O preço não é enviado pelo aplicativo.
+       * O backend recupera o valor da cotação.
+       */
+      const response = await api.post(
+        '/corridas',
+        {
+          cotacao_id: opcao.cotacao_id,
+          modalidade,
+          forma_pagamento: formaPagamento,
+        }
+      );
 
-        console.log(
-          'Categoria ID:',
-          opcao.categoria_veiculo_id
-        );
+      console.log('=================================');
+      console.log('CORRIDA CRIADA');
+      console.log(response.data);
+      console.log('=================================');
 
-        console.log(
-          '================================='
-        );
+      const valorConfirmado =
+        response.data?.corrida?.valor_estimado ??
+        opcao.valor_estimado;
 
-        /*
-         * IMPORTANTE:
-         *
-         * Não enviamos preço, distância
-         * ou duração.
-         *
-         * O backend calcula novamente
-         * esses valores.
-         */
-        const enderecoOrigem =
-          origemEndereco.trim() ||
-          `Localização atual (${origemLatitude.toFixed(6)}, ${origemLongitude.toFixed(6)})`;
+      const mensagemPagamento =
+        modalidade === 'ONLINE'
+          ? 'O pagamento foi registrado como pendente. A cobrança online será disponibilizada após a integração com o gateway.'
+          : 'O pagamento será confirmado pelo motorista após o recebimento.';
 
-        console.log('Endereço origem enviado:', enderecoOrigem);
-
-        const response =
-          await api.post(
-            '/corridas',
-            {
-              origem: enderecoOrigem,
-
-              origem_latitude:
-                origemLatitude,
-
-              origem_longitude:
-                origemLongitude,
-
-              destino_latitude:
-                destinoLatitude,
-
-              destino_longitude:
-                destinoLongitude,
-
-              destino,
-
-              categoria_veiculo_id:
-                opcao.categoria_veiculo_id,
-            }
-          );
-
-        console.log(
-          '================================='
-        );
-
-        console.log(
-          'CORRIDA CRIADA'
-        );
-
-        console.log(
-          response.data
-        );
-
-        console.log(
-          '================================='
-        );
-
-        Alert.alert(
-          'Corrida solicitada',
-          'Sua corrida foi solicitada com sucesso.',
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                router.replace(
-                  '/cliente'
-                );
-              },
+      Alert.alert(
+        'Corrida solicitada',
+        `Sua corrida foi solicitada com sucesso.\n\nValor: ${formatarValor(valorConfirmado)}\nPagamento: ${formaPagamento}\nModalidade: ${modalidade}\n\n${mensagemPagamento}`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              router.replace('/cliente');
             },
-          ]
-        );
-      } catch (error: any) {
-        console.error(
-          'Erro ao confirmar corrida:',
-          error?.response?.data ||
-            error
-        );
+          },
+        ]
+      );
 
-        const mensagem =
-          error?.response?.data
-            ?.message ||
-          error?.response?.data
-            ?.error ||
-          'Não foi possível solicitar a corrida.';
+    } catch (error: any) {
+      console.error(
+        'Erro ao confirmar corrida:',
+        error?.response?.data || error
+      );
 
-        Alert.alert(
-          'Erro',
-          mensagem
-        );
-      } finally {
-        setConfirmando(false);
-      }
-    };
+      const mensagem =
+        error?.response?.data?.message ||
+        error?.response?.data?.error ||
+        'Não foi possível solicitar a corrida.';
+
+      Alert.alert('Erro', mensagem);
+
+    } finally {
+      setConfirmando(false);
+    }
+  };
 
   /*
    * Carregando estimativa.
    */
   if (carregandoEstimativa) {
     return (
-      <View
-        style={
-          styles.loadingContainer
-        }
-      >
+      <View style={styles.loadingContainer}>
         <ActivityIndicator
           size="large"
           color="#2563eb"
         />
 
-        <Text
-          style={
-            styles.loadingTitle
-          }
-        >
+        <Text style={styles.loadingTitle}>
           Calculando sua corrida...
         </Text>
 
-        <Text
-          style={
-            styles.loadingText
-          }
-        >
+        <Text style={styles.loadingText}>
           Estamos calculando a distância,
           duração e valores disponíveis.
         </Text>
@@ -705,59 +498,29 @@ export default function ConfirmarCorrida() {
    */
   if (!estimativa) {
     return (
-      <View
-        style={
-          styles.loadingContainer
-        }
-      >
-        <Text
-          style={
-            styles.errorTitle
-          }
-        >
-          Não foi possível calcular a
-          corrida
+      <View style={styles.loadingContainer}>
+        <Text style={styles.errorTitle}>
+          Não foi possível calcular a corrida
         </Text>
 
-        <Text
-          style={
-            styles.errorText
-          }
-        >
-          Verifique o destino e tente
-          novamente.
+        <Text style={styles.errorText}>
+          Verifique o destino e tente novamente.
         </Text>
 
         <TouchableOpacity
-          style={
-            styles.retryButton
-          }
-          onPress={
-            carregarEstimativa
-          }
+          style={styles.retryButton}
+          onPress={carregarEstimativa}
         >
-          <Text
-            style={
-              styles.retryButtonText
-            }
-          >
+          <Text style={styles.retryButtonText}>
             Tentar novamente
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={
-            styles.backButton
-          }
-          onPress={() =>
-            router.back()
-          }
+          style={styles.backButton}
+          onPress={() => router.back()}
         >
-          <Text
-            style={
-              styles.backButtonText
-            }
-          >
+          <Text style={styles.backButtonText}>
             Voltar
           </Text>
         </TouchableOpacity>
@@ -765,117 +528,65 @@ export default function ConfirmarCorrida() {
     );
   }
 
-  /*
-   * Categoria selecionada.
-   */
-  const opcaoSelecionada =
-    estimativa.opcoes.find(
-      opcao =>
-        opcao.categoria_veiculo_id ===
-        categoriaSelecionada
-    );
+  const opcaoSelecionada = estimativa.opcoes.find(
+    opcao =>
+      opcao.categoria_veiculo_id === categoriaSelecionada
+  );
 
   return (
-    <View
-      style={styles.container}
-    >
+    <View style={styles.container}>
       <ScrollView
-        contentContainerStyle={
-          styles.content
-        }
-        showsVerticalScrollIndicator={
-          false
-        }
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
       >
         {/* CABEÇALHO */}
 
-        <View
-          style={styles.header}
-        >
+        <View style={styles.header}>
           <TouchableOpacity
-            style={
-              styles.headerBack
-            }
-            onPress={() =>
-              router.back()
-            }
+            style={styles.headerBack}
+            onPress={() => router.back()}
           >
-            <Text
-              style={
-                styles.headerBackText
-              }
-            >
+            <Text style={styles.headerBackText}>
               ‹
             </Text>
           </TouchableOpacity>
 
-          <View
-            style={
-              styles.headerTitleContainer
-            }
-          >
-            <Text
-              style={
-                styles.headerTitle
-              }
-            >
+          <View style={styles.headerTitleContainer}>
+            <Text style={styles.headerTitle}>
               Confirmar corrida
             </Text>
 
-            <Text
-              style={
-                styles.headerSubtitle
-              }
-            >
-              Escolha seu veículo
+            <Text style={styles.headerSubtitle}>
+              Escolha seu veículo e pagamento
             </Text>
           </View>
         </View>
 
         {/* ORIGEM */}
 
-        <View
-          style={
-            styles.originCard
-          }
-        >
-          <Text
-            style={
-              styles.originLabel
-            }
-          >
+        <View style={styles.originCard}>
+          <Text style={styles.originLabel}>
             ORIGEM
           </Text>
 
           <Text
-            style={
-              styles.originText
-            }
+            style={styles.originText}
             numberOfLines={3}
           >
-            {origemEndereco || 'Obtendo endereço da localização atual...'}
+            {origemEndereco ||
+              'Obtendo endereço da localização atual...'}
           </Text>
         </View>
 
         {/* DESTINO */}
 
-        <View
-          style={
-            styles.destinationCard
-          }
-        >
-          <Text
-            style={
-              styles.destinationLabel
-            }
-          >
+        <View style={styles.destinationCard}>
+          <Text style={styles.destinationLabel}>
             DESTINO
           </Text>
 
           <Text
-            style={
-              styles.destinationText
-            }
+            style={styles.destinationText}
             numberOfLines={3}
           >
             {destino}
@@ -884,57 +595,27 @@ export default function ConfirmarCorrida() {
 
         {/* RESUMO DA ROTA */}
 
-        <View
-          style={
-            styles.routeSummary
-          }
-        >
-          <View
-            style={
-              styles.routeSummaryItem
-            }
-          >
-            <Text
-              style={
-                styles.routeSummaryLabel
-              }
-            >
+        <View style={styles.routeSummary}>
+          <View style={styles.routeSummaryItem}>
+            <Text style={styles.routeSummaryLabel}>
               Distância
             </Text>
 
-            <Text
-              style={
-                styles.routeSummaryValue
-              }
-            >
+            <Text style={styles.routeSummaryValue}>
               {formatarDistancia(
                 estimativa.distancia_metros
               )}
             </Text>
           </View>
 
-          <View
-            style={styles.separator}
-          />
+          <View style={styles.separator} />
 
-          <View
-            style={
-              styles.routeSummaryItem
-            }
-          >
-            <Text
-              style={
-                styles.routeSummaryLabel
-              }
-            >
+          <View style={styles.routeSummaryItem}>
+            <Text style={styles.routeSummaryLabel}>
               Tempo estimado
             </Text>
 
-            <Text
-              style={
-                styles.routeSummaryValue
-              }
-            >
+            <Text style={styles.routeSummaryValue}>
               {formatarDuracao(
                 estimativa.duracao_estimada_segundos
               )}
@@ -942,205 +623,113 @@ export default function ConfirmarCorrida() {
           </View>
         </View>
 
-        {/* TÍTULO */}
+        {/* CATEGORIAS */}
 
-        <Text
-          style={styles.sectionTitle}
-        >
+        <Text style={styles.sectionTitle}>
           Escolha uma categoria
         </Text>
 
-        {/* CATEGORIAS */}
-
-        {estimativa.opcoes
-          .length === 0 ? (
-          <View
-            style={
-              styles.emptyCard
-            }
-          >
-            <Text
-              style={
-                styles.emptyTitle
-              }
-            >
-              Nenhuma categoria
-              disponível
+        {estimativa.opcoes.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>
+              Nenhuma categoria disponível
             </Text>
 
-            <Text
-              style={
-                styles.emptyText
-              }
-            >
-              Não existem categorias de
-              veículos disponíveis no
-              momento.
+            <Text style={styles.emptyText}>
+              Não existem categorias de veículos
+              disponíveis no momento.
             </Text>
           </View>
         ) : (
-          estimativa.opcoes.map(
-            opcao => {
-              const selecionada =
-                opcao.categoria_veiculo_id ===
-                categoriaSelecionada;
+          estimativa.opcoes.map(opcao => {
+            const selecionada =
+              opcao.categoria_veiculo_id === categoriaSelecionada;
 
-              return (
-                <TouchableOpacity
-                  key={
+            return (
+              <TouchableOpacity
+                key={opcao.cotacao_id}
+                style={[
+                  styles.vehicleCard,
+                  selecionada &&
+                    styles.vehicleCardSelected,
+                ]}
+                activeOpacity={0.8}
+                onPress={() =>
+                  setCategoriaSelecionada(
                     opcao.categoria_veiculo_id
-                  }
-                  style={[
-                    styles.vehicleCard,
-                    selecionada &&
-                      styles.vehicleCardSelected,
-                  ]}
-                  activeOpacity={
-                    0.8
-                  }
-                  onPress={() =>
-                    setCategoriaSelecionada(
-                      opcao.categoria_veiculo_id
-                    )
-                  }
-                >
-                  <View
-                    style={[
-                      styles.vehicleIcon,
-                      selecionada &&
-                        styles.vehicleIconSelected,
-                    ]}
-                  >
-                    <Text
-                      style={
-                        styles.vehicleIconText
-                      }
-                    >
-                      🚗
-                    </Text>
-                  </View>
-
-                  <View
-                    style={
-                      styles.vehicleInfo
-                    }
-                  >
-                    <View
-                      style={
-                        styles.vehicleNameRow
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.vehicleName
-                        }
-                      >
-                        {opcao.nome}
-                      </Text>
-
-                      {selecionada && (
-                        <View
-                          style={
-                            styles.selectedBadge
-                          }
-                        >
-                          <Text
-                            style={
-                              styles.selectedBadgeText
-                            }
-                          >
-                            Selecionado
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {opcao.descricao ? (
-                      <Text
-                        style={
-                          styles.vehicleDescription
-                        }
-                        numberOfLines={
-                          2
-                        }
-                      >
-                        {
-                          opcao.descricao
-                        }
-                      </Text>
-                    ) : null}
-
-                    <Text
-                      style={
-                        styles.capacityText
-                      }
-                    >
-                      Até{' '}
-                      {
-                        opcao.capacidade_passageiros
-                      }{' '}
-                      passageiro
-                      {opcao.capacidade_passageiros !==
-                      1
-                        ? 's'
-                        : ''}
-                    </Text>
-                  </View>
-
-                  <View
-                    style={
-                      styles.vehiclePriceContainer
-                    }
-                  >
-                    <Text
-                      style={
-                        styles.vehiclePrice
-                      }
-                    >
-                      {formatarValor(
-                        opcao.valor_estimado
-                      )}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            }
-          )
-        )}
-
-        {/* RESUMO */}
-
-        {opcaoSelecionada && (
-          <View
-            style={
-              styles.selectedSummary
-            }
-          >
-            <View>
-              <Text
-                style={
-                  styles.selectedSummaryLabel
+                  )
                 }
               >
+                <View
+                  style={[
+                    styles.vehicleIcon,
+                    selecionada &&
+                      styles.vehicleIconSelected,
+                  ]}
+                >
+                  <Text style={styles.vehicleIconText}>
+                    🚗
+                  </Text>
+                </View>
+
+                <View style={styles.vehicleInfo}>
+                  <View style={styles.vehicleNameRow}>
+                    <Text style={styles.vehicleName}>
+                      {opcao.nome}
+                    </Text>
+
+                    {selecionada && (
+                      <View style={styles.selectedBadge}>
+                        <Text style={styles.selectedBadgeText}>
+                          Selecionado
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {opcao.descricao ? (
+                    <Text
+                      style={styles.vehicleDescription}
+                      numberOfLines={2}
+                    >
+                      {opcao.descricao}
+                    </Text>
+                  ) : null}
+
+                  <Text style={styles.capacityText}>
+                    Até {opcao.capacidade_passageiros}{' '}
+                    passageiro
+                    {opcao.capacidade_passageiros !== 1
+                      ? 's'
+                      : ''}
+                  </Text>
+                </View>
+
+                <View style={styles.vehiclePriceContainer}>
+                  <Text style={styles.vehiclePrice}>
+                    {formatarValor(opcao.valor_estimado)}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })
+        )}
+
+        {/* RESUMO DA ESCOLHA */}
+
+        {opcaoSelecionada && (
+          <View style={styles.selectedSummary}>
+            <View>
+              <Text style={styles.selectedSummaryLabel}>
                 Sua escolha
               </Text>
 
-              <Text
-                style={
-                  styles.selectedSummaryVehicle
-                }
-              >
-                {
-                  opcaoSelecionada.nome
-                }
+              <Text style={styles.selectedSummaryVehicle}>
+                {opcaoSelecionada.nome}
               </Text>
             </View>
 
-            <Text
-              style={
-                styles.selectedSummaryPrice
-              }
-            >
+            <Text style={styles.selectedSummaryPrice}>
               {formatarValor(
                 opcaoSelecionada.valor_estimado
               )}
@@ -1148,22 +737,226 @@ export default function ConfirmarCorrida() {
           </View>
         )}
 
+        {/* MODALIDADE DE PAGAMENTO */}
+
+        <Text style={styles.sectionTitle}>
+          Como deseja pagar?
+        </Text>
+
+        <View style={styles.paymentOptionsRow}>
+          <TouchableOpacity
+            style={[
+              styles.paymentOption,
+              modalidade === 'PRESENCIAL' &&
+                styles.paymentOptionSelected,
+            ]}
+            activeOpacity={0.8}
+            onPress={() =>
+              selecionarModalidade('PRESENCIAL')
+            }
+          >
+            <Text style={styles.paymentOptionIcon}>
+              🚘
+            </Text>
+
+            <Text
+              style={[
+                styles.paymentOptionTitle,
+                modalidade === 'PRESENCIAL' &&
+                  styles.paymentOptionTitleSelected,
+              ]}
+            >
+              Presencial
+            </Text>
+
+            <Text style={styles.paymentOptionDescription}>
+              Pague ao motorista
+            </Text>
+
+            {modalidade === 'PRESENCIAL' && (
+              <Text style={styles.paymentSelectedMark}>
+                ✓ Selecionado
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.paymentOption,
+              modalidade === 'ONLINE' &&
+                styles.paymentOptionSelected,
+            ]}
+            activeOpacity={0.8}
+            onPress={() =>
+              selecionarModalidade('ONLINE')
+            }
+          >
+            <Text style={styles.paymentOptionIcon}>
+              📱
+            </Text>
+
+            <Text
+              style={[
+                styles.paymentOptionTitle,
+                modalidade === 'ONLINE' &&
+                  styles.paymentOptionTitleSelected,
+              ]}
+            >
+              Online
+            </Text>
+
+            <Text style={styles.paymentOptionDescription}>
+              Pagamento digital
+            </Text>
+
+            {modalidade === 'ONLINE' && (
+              <Text style={styles.paymentSelectedMark}>
+                ✓ Selecionado
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* FORMA DE PAGAMENTO */}
+
+        <Text style={styles.paymentSubtitle}>
+          Forma de pagamento
+        </Text>
+
+        <View style={styles.paymentMethods}>
+          {modalidade === 'PRESENCIAL' && (
+            <TouchableOpacity
+              style={[
+                styles.paymentMethod,
+                formaPagamento === 'DINHEIRO' &&
+                  styles.paymentMethodSelected,
+              ]}
+              onPress={() =>
+                setFormaPagamento('DINHEIRO')
+              }
+            >
+              <Text style={styles.paymentMethodIcon}>
+                💵
+              </Text>
+
+              <Text
+                style={[
+                  styles.paymentMethodText,
+                  formaPagamento === 'DINHEIRO' &&
+                    styles.paymentMethodTextSelected,
+                ]}
+              >
+                Dinheiro
+              </Text>
+
+              {formaPagamento === 'DINHEIRO' && (
+                <Text style={styles.paymentCheck}>
+                  ✓
+                </Text>
+              )}
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.paymentMethod,
+              formaPagamento === 'PIX' &&
+                styles.paymentMethodSelected,
+            ]}
+            onPress={() =>
+              setFormaPagamento('PIX')
+            }
+          >
+            <Text style={styles.paymentMethodIcon}>
+              ⚡
+            </Text>
+
+            <Text
+              style={[
+                styles.paymentMethodText,
+                formaPagamento === 'PIX' &&
+                  styles.paymentMethodTextSelected,
+              ]}
+            >
+              PIX
+            </Text>
+
+            {formaPagamento === 'PIX' && (
+              <Text style={styles.paymentCheck}>
+                ✓
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.paymentMethod,
+              formaPagamento === 'CARTAO' &&
+                styles.paymentMethodSelected,
+            ]}
+            onPress={() =>
+              setFormaPagamento('CARTAO')
+            }
+          >
+            <Text style={styles.paymentMethodIcon}>
+              💳
+            </Text>
+
+            <Text
+              style={[
+                styles.paymentMethodText,
+                formaPagamento === 'CARTAO' &&
+                  styles.paymentMethodTextSelected,
+              ]}
+            >
+              Cartão
+            </Text>
+
+            {formaPagamento === 'CARTAO' && (
+              <Text style={styles.paymentCheck}>
+                ✓
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* AVISO SOBRE PAGAMENTO */}
+
+        <View style={styles.paymentNotice}>
+          <Text style={styles.paymentNoticeTitle}>
+            {modalidade === 'PRESENCIAL'
+              ? 'Pagamento ao motorista'
+              : 'Pagamento online'}
+          </Text>
+
+          <Text style={styles.paymentNoticeText}>
+            {modalidade === 'PRESENCIAL'
+              ? formaPagamento === 'DINHEIRO'
+                ? 'Você pagará em dinheiro diretamente ao motorista. Ele confirmará o recebimento.'
+                : formaPagamento === 'PIX'
+                  ? 'Você pagará via PIX ao motorista. Ele deverá verificar o recebimento antes de confirmar.'
+                  : 'Você pagará utilizando a maquininha do motorista. Ele confirmará o recebimento.'
+              : 'O pagamento será registrado como pendente. A cobrança online por PIX ou cartão será ativada após a integração com o gateway de pagamento.'}
+          </Text>
+        </View>
+
         {/* CONFIRMAR */}
 
         <TouchableOpacity
           style={[
             styles.confirmButton,
-            (!categoriaSelecionada ||
-              confirmando) &&
-              styles.confirmButtonDisabled,
+            (
+              !categoriaSelecionada ||
+              confirmando ||
+              estimativa.opcoes.length === 0
+            ) && styles.confirmButtonDisabled,
           ]}
           disabled={
             !categoriaSelecionada ||
-            confirmando
+            confirmando ||
+            estimativa.opcoes.length === 0
           }
-          onPress={
-            confirmarCorrida
-          }
+          onPress={confirmarCorrida}
         >
           {confirmando ? (
             <ActivityIndicator
@@ -1171,23 +964,16 @@ export default function ConfirmarCorrida() {
               color="#fff"
             />
           ) : (
-            <Text
-              style={
-                styles.confirmButtonText
-              }
-            >
+            <Text style={styles.confirmButtonText}>
               Confirmar corrida
             </Text>
           )}
         </TouchableOpacity>
 
-        <Text
-          style={styles.infoText}
-        >
-          O valor apresentado é uma
-          estimativa. O valor final poderá
-          variar conforme as condições da
-          corrida.
+        <Text style={styles.infoText}>
+          O valor apresentado é o valor confirmado
+          da sua corrida. Ele não será aumentado
+          após a solicitação.
         </Text>
       </ScrollView>
     </View>
@@ -1521,7 +1307,7 @@ const styles = StyleSheet.create({
 
   selectedSummary: {
     marginTop: 8,
-    marginBottom: 15,
+    marginBottom: 25,
     padding: 17,
     borderRadius: 16,
     backgroundColor: '#0f172a',
@@ -1547,6 +1333,138 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#fff',
   },
+
+  // MODALIDADE DE PAGAMENTO
+
+  paymentOptionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+  },
+
+  paymentOption: {
+    flex: 1,
+    minHeight: 135,
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    padding: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  paymentOptionSelected: {
+    borderColor: '#2563eb',
+    backgroundColor: '#eff6ff',
+  },
+
+  paymentOptionIcon: {
+    fontSize: 27,
+    marginBottom: 8,
+  },
+
+  paymentOptionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#334155',
+  },
+
+  paymentOptionTitleSelected: {
+    color: '#1d4ed8',
+  },
+
+  paymentOptionDescription: {
+    marginTop: 5,
+    fontSize: 11,
+    color: '#64748b',
+    textAlign: 'center',
+  },
+
+  paymentSelectedMark: {
+    marginTop: 8,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+
+  paymentSubtitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 10,
+  },
+
+  paymentMethods: {
+    flexDirection: 'row',
+    gap: 9,
+    marginBottom: 15,
+  },
+
+  paymentMethod: {
+    flex: 1,
+    minHeight: 88,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 13,
+    padding: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  paymentMethodSelected: {
+    borderColor: '#2563eb',
+    backgroundColor: '#eff6ff',
+  },
+
+  paymentMethodIcon: {
+    fontSize: 23,
+    marginBottom: 6,
+  },
+
+  paymentMethodText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+
+  paymentMethodTextSelected: {
+    color: '#1d4ed8',
+  },
+
+  paymentCheck: {
+    position: 'absolute',
+    top: 5,
+    right: 7,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+
+  paymentNotice: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#fed7aa',
+    borderWidth: 1,
+    borderRadius: 13,
+    padding: 14,
+    marginBottom: 20,
+  },
+
+  paymentNoticeTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#9a3412',
+    marginBottom: 5,
+  },
+
+  paymentNoticeText: {
+    fontSize: 12,
+    lineHeight: 19,
+    color: '#7c2d12',
+  },
+
+  // BOTÃO DE CONFIRMAÇÃO
 
   confirmButton: {
     height: 56,

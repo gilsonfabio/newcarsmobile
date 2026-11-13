@@ -485,7 +485,7 @@ export default function SolicitarCorrida() {
 
         <Text style={styles.subtitulo}>
           Informe a origem e o destino da sua corrida. Você também pode usar sua
-          localização atual como destino.
+          localização atual como origem.
         </Text>
 
         {/* ORIGEM */}
@@ -567,7 +567,22 @@ export default function SolicitarCorrida() {
             </View>
           )}
         </View>
-
+         
+        <TouchableOpacity
+            style={styles.botaoLocalizacao}
+            onPress={usarLocalizacaoAtualComoOrigem}
+            disabled={carregandoLocalizacao}
+            activeOpacity={0.8}
+          >
+            {carregandoLocalizacao ? (
+              <ActivityIndicator color="#087F5B" />
+            ) : (
+              <Text style={styles.botaoLocalizacaoTexto}>
+                ◎ Usar minha localização atual como origem
+              </Text>
+            )}
+        </TouchableOpacity>
+        
         {/* DESTINO */}
         <View style={styles.enderecoContainer}>
           <Text style={styles.label}>Destino</Text>
@@ -632,27 +647,12 @@ export default function SolicitarCorrida() {
               ))}
             </View>
           )}
-
-          <TouchableOpacity
-            style={styles.botaoLocalizacao}
-            onPress={usarLocalizacaoAtualComoOrigem}
-            disabled={carregandoLocalizacao}
-            activeOpacity={0.8}
-          >
-            {carregandoLocalizacao ? (
-              <ActivityIndicator color="#087F5B" />
-            ) : (
-              <Text style={styles.botaoLocalizacaoTexto}>
-                ◎ Usar minha localização atual como destino
-              </Text>
-            )}
-          </TouchableOpacity>
-
+          
           {destino && destinoSelecionado && (
             <View style={styles.enderecoSelecionado}>
               <Text style={styles.enderecoSelecionadoTitulo}>
                 ✓ {usandoLocalizacaoDestino
-                  ? 'Localização atual definida como destino'
+                  ? 'Localização atual definida como origem'
                   : 'Destino selecionado'}
               </Text>
               <Text style={styles.enderecoSelecionadoTexto}>
@@ -669,7 +669,7 @@ export default function SolicitarCorrida() {
           <Text style={styles.infoIcone}>ℹ️</Text>
           <Text style={styles.infoTexto}>
             Para a origem e o destino, selecione uma sugestão válida ou utilize
-            o botão de localização atual no destino. Confira os endereços antes
+            o botão de localização atual na origem. Confira os endereços antes
             de continuar.
           </Text>
         </View>
